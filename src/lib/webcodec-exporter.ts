@@ -103,7 +103,7 @@ export async function exportProjectWebCodecs(
     audioEncoder.configure({
       codec: 'mp4a.40.2', // AAC-LC
       numberOfChannels: 2,
-      sampleRate: 44100,
+      sampleRate: audioBuffer.sampleRate, // Match mixed audio sample rate
       bitrate: 128000
     });
   }
@@ -224,7 +224,7 @@ export async function exportProjectWebCodecs(
       if (trackHidden) continue;
       if (type === 'video') {
       const video = clip.assetId ? videoElements.get(clip.assetId) : null;
-      if (video && video.readyState >= 2) {
+      if (video) {
         const speed = clip.speed || 1.0;
         const offset = timeMs - clip.positionMs;
         const sourceTime = (clip.trimStartMs + offset * speed) / 1000;
@@ -666,10 +666,12 @@ export async function exportProjectWebCodecs(
     for (let offset = 0; offset < length; offset += frameSize) {
       const size = Math.min(frameSize, length - offset);
       const data = new Float32Array(size * channels);
+      // Correct planar copy for 'f32-planar' format
       for (let ch = 0; ch < channels; ch++) {
         const chData = audioBuffer.getChannelData(ch);
+        const targetOffset = ch * size;
         for (let i = 0; i < size; i++) {
-          data[i * channels + ch] = chData[offset + i];
+          data[targetOffset + i] = chData[offset + i];
         }
       }
 
