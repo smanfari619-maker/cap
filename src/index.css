@@ -63,6 +63,34 @@ body {
   background: #3f3f46;
 }
 
+/* Timeline-specific scrollbar: always-visible horizontal, hidden vertical */
+.timeline-scroll {
+  scrollbar-gutter: stable;
+}
+
+/* Always show the horizontal scrollbar on the timeline */
+.timeline-scroll::-webkit-scrollbar {
+  width: 0px;        /* hide vertical bar */
+  height: 8px;       /* horizontal bar height */
+}
+.timeline-scroll::-webkit-scrollbar-track {
+  background: #0d0d10;
+  border-top: 1px solid #1f1f23;
+}
+.timeline-scroll::-webkit-scrollbar-thumb {
+  background: #2d4a52;
+  border-radius: 4px;
+  border: 1px solid #1a3540;
+}
+.timeline-scroll::-webkit-scrollbar-thumb:hover {
+  background: #3a6070;
+}
+/* Firefox */
+.timeline-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #2d4a52 #0d0d10;
+}
+
 /* Custom range slider styling */
 input[type="range"] {
   -webkit-appearance: none;

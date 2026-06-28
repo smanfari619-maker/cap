@@ -9,8 +9,8 @@ export async function mixAudioTracks(project: Project, sampleRate = 44100): Prom
   for (const track of project.tracks) {
     if (track.type === 'video' || track.type === 'audio') {
       for (const clip of track.clips) {
-        if (clip.assetId) {
-          audioVideoClips.push({ clip, type: track.type });
+        if (clip.assetId && clip.type !== 'image') {
+          audioVideoClips.push({ clip, type: track.type === 'audio' ? 'audio' : 'video' });
           const endMs = clip.positionMs + clip.durationMs;
           if (endMs > maxTimeMs) {
             maxTimeMs = endMs;

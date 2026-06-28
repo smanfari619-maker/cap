@@ -167,12 +167,12 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
     const isAudio = asset.type.startsWith('audio/');
     const isImage = asset.type.startsWith('image/');
     const clipType = isAudio ? 'audio' : isImage ? 'image' : 'video';
-    const trackType = clipType; // track type matches clip type
+    const trackType = clipType === 'image' ? 'video' : clipType;
 
     // Find an existing track of this type, or create one
     let track = project.tracks.find(t => t.type === trackType);
     if (!track) {
-      await addTrack(trackType);
+      await addTrack(trackType as 'video' | 'audio' | 'text');
       // Re-read the project to get the new track
       const updatedProject = useEditorStore.getState().project;
       track = updatedProject?.tracks.find(t => t.type === trackType);

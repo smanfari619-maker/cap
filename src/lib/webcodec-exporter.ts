@@ -112,48 +112,42 @@ export async function exportProjectWebCodecs(
   const videoElements = new Map<string, HTMLVideoElement>();
   const imageElements = new Map<string, HTMLImageElement>();
   for (const track of project.tracks) {
-    if (track.type === 'video') {
-      for (const clip of track.clips) {
-        if (clip.assetId && !videoElements.has(clip.assetId)) {
-          try {
-            const asset = await db.assets.get(clip.assetId);
-            if (asset) {
-              const file = await getFileFromOPFS(asset.opfsPath);
-              const url = URL.createObjectURL(file);
-              const video = document.createElement('video');
-              video.src = url;
-              video.muted = true;
-              video.playsInline = true;
-              video.preload = 'auto';
-              await new Promise((resolve) => {
-                video.onloadedmetadata = resolve;
-              });
-              videoElements.set(clip.assetId, video);
-            }
-          } catch (err) {
-            console.warn(`Failed to preload asset for export:`, err);
+    for (const clip of track.clips) {
+      if (clip.type === 'video' && clip.assetId && !videoElements.has(clip.assetId)) {
+        try {
+          const asset = await db.assets.get(clip.assetId);
+          if (asset) {
+            const file = await getFileFromOPFS(asset.opfsPath);
+            const url = URL.createObjectURL(file);
+            const video = document.createElement('video');
+            video.src = url;
+            video.muted = true;
+            video.playsInline = true;
+            video.preload = 'auto';
+            await new Promise((resolve) => {
+              video.onloadedmetadata = resolve;
+            });
+            videoElements.set(clip.assetId, video);
           }
+        } catch (err) {
+          console.warn(`Failed to preload asset for export:`, err);
         }
-      }
-    } else if (track.type === 'image') {
-      for (const clip of track.clips) {
-        if (clip.assetId && !imageElements.has(clip.assetId)) {
-          try {
-            const asset = await db.assets.get(clip.assetId);
-            if (asset) {
-              const file = await getFileFromOPFS(asset.opfsPath);
-              const url = URL.createObjectURL(file);
-              const img = new Image();
-              img.src = url;
-              await new Promise((resolve, reject) => {
-                img.onload = resolve;
-                img.onerror = reject;
-              });
-              imageElements.set(clip.assetId, img);
-            }
-          } catch (err) {
-            console.warn(`Failed to preload image asset for export:`, err);
+      } else if (clip.type === 'image' && clip.assetId && !imageElements.has(clip.assetId)) {
+        try {
+          const asset = await db.assets.get(clip.assetId);
+          if (asset) {
+            const file = await getFileFromOPFS(asset.opfsPath);
+            const url = URL.createObjectURL(file);
+            const img = new Image();
+            img.src = url;
+            await new Promise((resolve, reject) => {
+              img.onload = resolve;
+              img.onerror = reject;
+            });
+            imageElements.set(clip.assetId, img);
           }
+        } catch (err) {
+          console.warn(`Failed to preload image asset for export:`, err);
         }
       }
     }
@@ -213,8 +207,10 @@ export async function exportProjectWebCodecs(
       const track = project.tracks[i];
       const activeClips = track.clips.filter(c => timeMs >= c.positionMs && timeMs < c.positionMs + c.durationMs);
       for (const clip of activeClips) {
-        if (track.type === 'video') activeVisualClips.push({ clip, trackHidden: !!track.hidden, type: 'video' });
-        if (track.type === 'image') activeVisualClips.push({ clip, trackHidden: !!track.hidden, type: 'image' });
+        if (track.type === 'video' || (track.type as string) === 'image') {
+          if (clip.type === 'video') activeVisualClips.push({ clip, trackHidden: !!track.hidden, type: 'video' });
+          if (clip.type === 'image') activeVisualClips.push({ clip, trackHidden: !!track.hidden, type: 'image' });
+        }
         if (track.type === 'text') activeTextClips.push({ clip, trackHidden: !!track.hidden });
       }
     }

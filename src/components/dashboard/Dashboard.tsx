@@ -37,9 +37,9 @@ export default function Dashboard() {
       height,
       fps,
       tracks: [
+        { id: 't1', name: 'Text Track 1', type: 'text', clips: [] },
         { id: 'v1', name: 'Video Track 1', type: 'video', clips: [] },
-        { id: 'a1', name: 'Audio Track 1', type: 'audio', clips: [] },
-        { id: 't1', name: 'Text Track 1', type: 'text', clips: [] }
+        { id: 'a1', name: 'Audio Track 1', type: 'audio', clips: [] }
       ],
       createdAt: new Date(),
       updatedAt: new Date()

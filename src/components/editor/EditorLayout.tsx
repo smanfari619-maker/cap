@@ -35,10 +35,13 @@ export default function EditorLayout() {
   const setSelectedClipId = useEditorStore(state => state.setSelectedClipId);
   const setSelectedClipIds = useEditorStore(state => state.setSelectedClipIds);
   const removeClip = useEditorStore(state => state.removeClip);
+  const addClip = useEditorStore(state => state.addClip);
   const splitClipAtPlayhead = useEditorStore(state => state.splitClipAtPlayhead);
   const upscaleEnabled = useEditorStore(state => state.upscaleEnabled);
   const undo = useEditorStore(state => state.undo);
   const redo = useEditorStore(state => state.redo);
+
+  const clipboardClipRef = useRef<any>(null);
 
   const [activeTab, setActiveTab] = useState<string>('media');
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
@@ -172,6 +175,88 @@ export default function EditorLayout() {
         e.preventDefault();
         setZoom(Math.min(500, zoom + 10));
       }
+      // Shift+Z: Zoom to fit timeline window
+      else if (e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        if (!isCmdOrCtrl) {
+          e.preventDefault();
+          if (!project) return;
+          let maxTime = 10000; // minimum 10s
+          project.tracks.forEach(t => {
+            t.clips.forEach(c => {
+              maxTime = Math.max(maxTime, c.positionMs + c.durationMs);
+            });
+          });
+          const scrollEl = document.querySelector('.timeline-scroll');
+          if (scrollEl) {
+            const fitZoom = (scrollEl.clientWidth - 40) / (maxTime / 1000);
+            setZoom(Math.max(10, Math.min(500, fitZoom)));
+          }
+        }
+      }
+      // Home / End playhead navigation
+      else if (e.key === 'Home') {
+        e.preventDefault();
+        setCurrentTime(0);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        if (!project) return;
+        let maxTime = 0;
+        project.tracks.forEach(t => {
+          t.clips.forEach(c => {
+            maxTime = Math.max(maxTime, c.positionMs + c.durationMs);
+          });
+        });
+        setCurrentTime(maxTime);
+      }
+      // Clipboard Copy (Ctrl/Cmd + C)
+      else if (isCmdOrCtrl && (e.key === 'c' || e.key === 'C')) {
+        if (selectedClipIds.length > 0) {
+          e.preventDefault();
+          const target = project?.tracks.flatMap(t => t.clips).find(c => selectedClipIds.includes(c.id));
+          if (target) {
+            clipboardClipRef.current = target;
+          }
+        }
+      }
+      // Clipboard Paste (Ctrl/Cmd + V)
+      else if (isCmdOrCtrl && (e.key === 'v' || e.key === 'V')) {
+        if (clipboardClipRef.current && project) {
+          e.preventDefault();
+          const source = clipboardClipRef.current;
+          const pasteTrack = project.tracks.find(t => t.type === source.type && !t.locked) || project.tracks.find(t => t.type === source.type);
+          if (pasteTrack) {
+            const newClipId = Math.random().toString(36).substring(2, 9);
+            const pastedClip = {
+              ...source,
+              id: newClipId,
+              positionMs: currentTime,
+              trackId: pasteTrack.id
+            };
+            addClip(pasteTrack.id, pastedClip);
+            setSelectedClipIds([newClipId]);
+          }
+        }
+      }
+      // J/K/L Shuttle speed play/reverse control
+      else if (!isCmdOrCtrl && !e.altKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        const liveSpeed = useEditorStore.getState().playbackSpeed;
+        const nextSpeed = liveSpeed >= 1 ? Math.min(8, liveSpeed * 2) : 1;
+        useEditorStore.setState({ playbackSpeed: nextSpeed });
+        setIsPlaying(true);
+      }
+      else if (!isCmdOrCtrl && !e.altKey && e.key.toLowerCase() === 'j') {
+        e.preventDefault();
+        const liveSpeed = useEditorStore.getState().playbackSpeed;
+        const nextSpeed = liveSpeed <= -1 ? Math.max(-8, liveSpeed * 2) : -1;
+        useEditorStore.setState({ playbackSpeed: nextSpeed });
+        setIsPlaying(true);
+      }
+      else if (!isCmdOrCtrl && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        useEditorStore.setState({ playbackSpeed: 1 });
+        setIsPlaying(false);
+      }
       // Escape deselect
       else if (e.key === 'Escape') {
         setSelectedClipIds([]);
@@ -179,7 +264,7 @@ export default function EditorLayout() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, isPlaying, setIsPlaying, currentTime, setCurrentTime, zoom, setZoom, selectedClipId, selectedClipIds, setSelectedClipId, setSelectedClipIds, removeClip, splitClipAtPlayhead, project]);
+  }, [undo, redo, isPlaying, setIsPlaying, currentTime, setCurrentTime, zoom, setZoom, selectedClipId, selectedClipIds, setSelectedClipId, setSelectedClipIds, removeClip, addClip, splitClipAtPlayhead, project]);
 
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [projectTitle, setProjectTitle] = useState('');

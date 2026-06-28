@@ -311,7 +311,7 @@ export default function VideoPreview() {
         ctx.save();
         ctx.globalAlpha = Math.max(0, Math.min(opacity, 1.0));
 
-        if (trackType === 'video' && clip.assetId) {
+        if (clip.type === 'video' && clip.assetId) {
           const media = mediaElementsRef.current.get(clip.assetId);
           if (media && media instanceof HTMLVideoElement && media.readyState >= 2) {
             
@@ -672,7 +672,7 @@ export default function VideoPreview() {
           ctx.fillText(settings.content, xPos, yPos);
 
           ctx.restore();
-        } else if (trackType === 'image' && clip.assetId) {
+        } else if (clip.type === 'image' && clip.assetId) {
           const img = imageElementsRef.current.get(clip.assetId);
           if (img && img.complete && img.naturalWidth > 0) {
             // Reuse the same transform/opacity/blend logic as video clips
@@ -754,11 +754,18 @@ export default function VideoPreview() {
       const delta = now - lastTime;
       lastTime = now;
 
-      // Adjust for playback speed if necessary, but default tick is 1:1 real-time
-      const nextTime = useEditorStore.getState().currentTime + delta;
+      // Adjust for playback speed (supports J/K/L reverse/fast-forward multipliers)
+      const speed = useEditorStore.getState().playbackSpeed ?? 1;
+      const nextTime = useEditorStore.getState().currentTime + delta * speed;
+      
       if (nextTime >= totalDuration) {
         setCurrentTime(0);
         setIsPlaying(false);
+        useEditorStore.setState({ playbackSpeed: 1 });
+      } else if (nextTime < 0) {
+        setCurrentTime(0);
+        setIsPlaying(false);
+        useEditorStore.setState({ playbackSpeed: 1 });
       } else {
         setCurrentTime(nextTime);
         animId = requestAnimationFrame(tick);

@@ -1,5 +1,5 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
-import { Type, Scissors, Trash2, ZoomIn, ZoomOut, Lock, Unlock, Volume2, VolumeX, Eye, EyeOff, Smile, Undo2, Redo2, Magnet, Link2, Rows, Settings, Image as ImageIcon, Music, MousePointer, Crop, Snowflake, RotateCw, Mic, RefreshCw, Copy, Clipboard, FileCog, FolderOpen, Power, Wand2, FileVideo, ChevronRight } from 'lucide-react';
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { Type, Scissors, Trash2, ZoomIn, ZoomOut, Lock, Unlock, Volume2, VolumeX, Eye, EyeOff, Smile, Undo2, Redo2, Magnet, Link2, Rows, Settings, Image as ImageIcon, Music, MousePointer, Crop, Snowflake, RotateCw, Mic, RefreshCw, Copy, Clipboard, FileCog, FolderOpen, Power, Wand2, FileVideo, ChevronRight, Edit2, ChevronUp, ChevronDown } from 'lucide-react';
 import { useEditorStore } from '../../store/editorStore';
 import { db, type TimelineClip, type TimelineTrack } from '../../lib/db';
 
@@ -18,6 +18,19 @@ const formatClipDuration = (ms: number, fps: number = 30) => {
   return `${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}:${frames.toString().padStart(2, '0')}`;
 };
 
+const getTrackHeight = (type: 'video' | 'audio' | 'image' | 'text') => {
+  switch (type) {
+    case 'video':
+    case 'image':
+      return 68;
+    case 'audio':
+      return 50;
+    case 'text':
+    default:
+      return 32;
+  }
+};
+
 export default function Timeline({ height }: { height: number }) {
   const project = useEditorStore(state => state.project);
   const setCurrentTime = useEditorStore(state => state.setCurrentTime);
@@ -32,7 +45,6 @@ export default function Timeline({ height }: { height: number }) {
   const removeClip = useEditorStore(state => state.removeClip);
   const splitClipAtPlayhead = useEditorStore(state => state.splitClipAtPlayhead);
   const addClip = useEditorStore(state => state.addClip);
-  const addTrack = useEditorStore(state => state.addTrack);
   const removeTrack = useEditorStore(state => state.removeTrack);
   const reorderTrack = useEditorStore(state => state.reorderTrack);
   const undo = useEditorStore(state => state.undo);
@@ -42,6 +54,29 @@ export default function Timeline({ height }: { height: number }) {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const pxPerMs = zoom / 1000;
+  // Stable minimum width: covers 10 minutes of content or 3000px, whichever is larger
+  const timelineMinWidth = useMemo(() => Math.max(3000, 600000 * (zoom / 1000)), [zoom]);
+
+  // Helper to determine track label (e.g. V1, V2, A1, T1) based on order
+  const getTrackLabel = (track: TimelineTrack) => {
+    if (!project) return '';
+    const sameTypeTracks = project.tracks.filter(t => t.type === track.type);
+    const index = sameTypeTracks.findIndex(t => t.id === track.id);
+    if (index === -1) return '';
+    
+    const prefix = {
+      video: 'V',
+      audio: 'A',
+      image: 'I',
+      text: 'T'
+    }[track.type] || 'T';
+
+    if (track.type === 'audio') {
+      return `${prefix}${index + 1}`;
+    } else {
+      return `${prefix}${sameTypeTracks.length - index}`;
+    }
+  };
 
   // Marquee Selection Box State
   const [selectionBox, setSelectionBox] = useState<{
@@ -56,12 +91,17 @@ export default function Timeline({ height }: { height: number }) {
   const emojis = ['❤️', '🔥', '✨', '😂', '👍', '🎉', '🚀', '💡', '🎬', '📱', '❌', '✅', '💥', '👀', '⭐', '🎈'];
 
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string[]>>({});
+  const thumbnailCacheRef = useRef<Record<string, string[]>>({});
   const [waveformCache, setWaveformCache] = useState<Record<string, number[]>>({});
+  const waveformCacheRef = useRef<Record<string, number[]>>({});
   const [assetDurations, setAssetDurations] = useState<Record<string, number>>({});
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const snapEnabledRef = useRef(true);
   const [rippleEnabled, setRippleEnabled] = useState(false);
+  const rippleEnabledRef = useRef(false);
+
+  useEffect(() => { rippleEnabledRef.current = rippleEnabled; }, [rippleEnabled]);
 
   // Load durations of all assets on the timeline
   useEffect(() => {
@@ -94,6 +134,21 @@ export default function Timeline({ height }: { height: number }) {
   const autoScrollMaxRef = useRef(0);
   const playheadRef = useRef<HTMLDivElement>(null);
   const playheadTextRef = useRef<HTMLDivElement>(null);
+  const headersRef = useRef<HTMLDivElement>(null);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+
+    // Never allow scrolling past the left edge (time = 0)
+    if (el.scrollLeft < 0) {
+      el.scrollLeft = 0;
+    }
+
+    // Sync vertical scroll of the left gutter headers
+    if (headersRef.current) {
+      headersRef.current.scrollTop = el.scrollTop;
+    }
+  };
 
   // High-Performance Playhead & Auto-Scroll Subscription:
   // Updates the DOM directly on every frame without triggering React re-renders.
@@ -184,11 +239,13 @@ export default function Timeline({ height }: { height: number }) {
     const videoClips = project.tracks
       .filter(t => t.type === 'video')
       .flatMap(t => t.clips)
-      .filter(c => c.assetId && !thumbnailCache[c.assetId]);
+      .filter(c => c.assetId && !thumbnailCacheRef.current[c.assetId]);
       
     videoClips.forEach(async (clip) => {
       if (!clip.assetId) return;
       const assetId = clip.assetId;
+      // Mark as in-progress immediately to prevent duplicate extractions
+      thumbnailCacheRef.current[assetId] = [];
       
       try {
         const asset = await db.assets.get(assetId);
@@ -198,55 +255,84 @@ export default function Timeline({ height }: { height: number }) {
         const file = await getFileFromOPFS(asset.opfsPath);
         const objectUrl = URL.createObjectURL(file);
         
-        const video = document.createElement('video');
-        video.src = objectUrl;
-        video.muted = true;
-        video.playsInline = true;
-        video.preload = 'auto';
-        
-        await new Promise((resolve) => {
-          video.onloadedmetadata = resolve;
-        });
-
-        const duration = video.duration;
-        const numFrames = 10;
-        const frames: string[] = [];
-        
-        const canvas = document.createElement('canvas');
-        const videoWidth = video.videoWidth || 320;
-        const videoHeight = video.videoHeight || 180;
-        const aspect = videoWidth / videoHeight;
-        
-        canvas.height = 180;
-        canvas.width = Math.round(180 * aspect);
-        const ctx = canvas.getContext('2d');
-        
-        for (let i = 0; i < numFrames; i++) {
-          const targetTime = (duration / (numFrames + 1)) * (i + 1);
-          video.currentTime = targetTime;
-          
-          await new Promise((resolve) => {
-            video.onseeked = resolve;
+        if (asset.type.startsWith('image/')) {
+          // Fast single-frame extraction for image assets
+          const img = new Image();
+          img.src = objectUrl;
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = reject;
           });
           
+          const canvas = document.createElement('canvas');
+          const aspect = img.naturalWidth / (img.naturalHeight || 1);
+          canvas.height = 180;
+          canvas.width = Math.round(180 * aspect);
+          const ctx = canvas.getContext('2d');
           if (ctx) {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            frames.push(canvas.toDataURL('image/jpeg', 0.6));
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const frame = canvas.toDataURL('image/jpeg', 0.6);
+            setThumbnailCache(prev => {
+              const updated = { ...prev, [assetId]: [frame] };
+              thumbnailCacheRef.current = updated;
+              return updated;
+            });
           }
+          URL.revokeObjectURL(objectUrl);
+        } else {
+          // Standard multi-frame seek for video assets
+          const video = document.createElement('video');
+          video.src = objectUrl;
+          video.muted = true;
+          video.playsInline = true;
+          video.preload = 'auto';
+          
+          await new Promise((resolve) => {
+            video.onloadedmetadata = resolve;
+          });
+
+          const duration = video.duration;
+          const numFrames = 10;
+          const frames: string[] = [];
+          
+          const canvas = document.createElement('canvas');
+          const videoWidth = video.videoWidth || 320;
+          const videoHeight = video.videoHeight || 180;
+          const aspect = videoWidth / videoHeight;
+          
+          canvas.height = 180;
+          canvas.width = Math.round(180 * aspect);
+          const ctx = canvas.getContext('2d');
+          
+          for (let i = 0; i < numFrames; i++) {
+            const targetTime = (duration / (numFrames + 1)) * (i + 1);
+            video.currentTime = targetTime;
+            
+            await new Promise((resolve) => {
+              video.onseeked = resolve;
+            });
+            
+            if (ctx) {
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+              frames.push(canvas.toDataURL('image/jpeg', 0.6));
+            }
+          }
+          
+          setThumbnailCache(prev => {
+            const updated = { ...prev, [assetId]: frames };
+            thumbnailCacheRef.current = updated;
+            return updated;
+          });
+          
+          URL.revokeObjectURL(objectUrl);
+          video.remove();
         }
-        
-        setThumbnailCache(prev => ({
-          ...prev,
-          [assetId]: frames
-        }));
-        
-        URL.revokeObjectURL(objectUrl);
-        video.remove();
       } catch (error) {
         console.error(`Failed to extract thumbnails for asset ${assetId}:`, error);
       }
     });
-  }, [project, thumbnailCache]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project]);
 
   // Real PCM Waveform extractor for audio clips
   useEffect(() => {
@@ -254,11 +340,13 @@ export default function Timeline({ height }: { height: number }) {
     const audioClips = project.tracks
       .filter(t => t.type === 'audio')
       .flatMap(t => t.clips)
-      .filter(c => c.assetId && !waveformCache[c.assetId]);
+      .filter(c => c.assetId && !waveformCacheRef.current[c.assetId]);
 
     audioClips.forEach(async (clip) => {
       if (!clip.assetId) return;
       const assetId = clip.assetId;
+      // Mark as in-progress immediately
+      waveformCacheRef.current[assetId] = [];
       try {
         const asset = await db.assets.get(assetId);
         if (!asset) return;
@@ -280,12 +368,17 @@ export default function Timeline({ height }: { height: number }) {
           }
           peaks.push(Math.min(1, max));
         }
-        setWaveformCache(prev => ({ ...prev, [assetId]: peaks }));
+        setWaveformCache(prev => {
+          const updated = { ...prev, [assetId]: peaks };
+          waveformCacheRef.current = updated;
+          return updated;
+        });
       } catch (e) {
         console.warn('Waveform extraction failed for', assetId, e);
       }
     });
-  }, [project, waveformCache]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project]);
 
   const handleAddEmojiClip = async (emoji: string) => {
     const textTrack = project?.tracks.find(t => t.type === 'text');
@@ -343,17 +436,44 @@ export default function Timeline({ height }: { height: number }) {
     setDragOverTimeMs(null);
 
     const assetId = e.dataTransfer.getData('application/cap-asset-id');
-    const assetType = e.dataTransfer.getData('application/cap-asset-type');
+    const assetType = e.dataTransfer.getData('application/cap-asset-type') as 'video' | 'audio' | 'image';
     
     if (!assetId || !project) return;
 
     const track = project.tracks.find(t => t.id === trackId);
     if (!track) return;
 
-    // Allow video → video, audio → audio, image → image
-    if (track.type !== assetType) {
-      alert(`Cannot drop a ${assetType} asset onto a ${track.type} track.`);
-      return;
+    let targetTrackId = trackId;
+
+    const isTrackVisual = track.type === 'video' || (track.type as string) === 'image';
+    const isAssetVisual = assetType === 'video' || assetType === 'image';
+    const isCompatible = (track.type === assetType) || (isTrackVisual && isAssetVisual);
+
+    // Auto-route different asset types to their corresponding track types
+    if (!isCompatible) {
+      const targetType = isAssetVisual ? 'video' : assetType;
+      const existingTrack = project.tracks.find(t => t.type === targetType);
+      if (existingTrack) {
+        targetTrackId = existingTrack.id;
+      } else {
+        // Create a new track of this type
+        const newTrackId = Math.random().toString(36).substring(2, 9);
+        const typeLabels: Record<string, string> = {
+          video: 'Video Track 1', audio: 'Audio Track 1', text: 'Text Track 1'
+        };
+        const newTrack: TimelineTrack = {
+          id: newTrackId,
+          name: typeLabels[targetType] || `${targetType} Track 1`,
+          type: targetType as 'video' | 'audio' | 'text',
+          clips: [],
+          locked: false,
+          muted: false,
+          hidden: false
+        };
+        // Wait for updateTracks to commit track structure changes
+        await updateTracks([...project.tracks, newTrack]);
+        targetTrackId = newTrackId;
+      }
     }
 
     const asset = await db.assets.get(assetId);
@@ -369,7 +489,7 @@ export default function Timeline({ height }: { height: number }) {
     const newClip: Omit<TimelineClip, 'trackId'> = {
       id: clipId,
       assetId: asset.id,
-      type: track.type as 'video' | 'audio' | 'image',
+      type: assetType, // keep clip's true asset type (video or image)
       name: asset.name,
       durationMs: asset.durationMs,
       trimStartMs: 0,
@@ -389,7 +509,106 @@ export default function Timeline({ height }: { height: number }) {
       }
     };
 
-    await addClip(trackId, newClip);
+    await addClip(targetTrackId, newClip);
+    setSelectedClipId(clipId);
+  };
+
+  const handleAreaDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleAreaDrop = async (e: React.DragEvent) => {
+    if (e.defaultPrevented) return;
+    e.preventDefault();
+
+    const assetId = e.dataTransfer.getData('application/cap-asset-id');
+    const assetType = e.dataTransfer.getData('application/cap-asset-type') as 'video' | 'audio' | 'image';
+    
+    if (!assetId || !project) return;
+    const asset = await db.assets.get(assetId);
+    if (!asset) return;
+
+    // Calculate vertical drop coordinate relative to ruler top
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || !containerRef.current) return;
+    const relativeY = e.clientY - rect.top - 36 - 4; // 36 is ruler height, 4 is pt-1 padding
+
+    const isAssetVisual = assetType === 'video' || assetType === 'image';
+
+    // Find the track closest to this Y position of same type
+    let closestTrack: TimelineTrack | null = null;
+    let tempTop = 0;
+    for (const t of project.tracks) {
+      const tHeight = getTrackHeight(t.type);
+      if (relativeY >= tempTop && relativeY < tempTop + tHeight + 6) {
+        const isTrackVisual = t.type === 'video' || (t.type as string) === 'image';
+        const isCompatible = (t.type === assetType) || (isTrackVisual && isAssetVisual);
+        if (isCompatible) {
+          closestTrack = t;
+        }
+        break;
+      }
+      tempTop += tHeight + 6;
+    }
+
+    let targetTrackId = '';
+    if (closestTrack) {
+      targetTrackId = closestTrack.id;
+    } else {
+      // Fallback to first existing track of this type
+      const targetType = isAssetVisual ? 'video' : assetType;
+      const firstOfType = project.tracks.find(t => t.type === targetType);
+      if (firstOfType) {
+        targetTrackId = firstOfType.id;
+      } else {
+        // Create new track of this type
+        const newTrackId = Math.random().toString(36).substring(2, 9);
+        const typeLabels: Record<string, string> = {
+          video: 'Video Track 1', audio: 'Audio Track 1', text: 'Text Track 1'
+        };
+        const newTrack: TimelineTrack = {
+          id: newTrackId,
+          name: typeLabels[targetType] || `${targetType} Track 1`,
+          type: targetType as 'video' | 'audio' | 'text',
+          clips: [],
+          locked: false,
+          muted: false,
+          hidden: false
+        };
+        await updateTracks([...project.tracks, newTrack]);
+        targetTrackId = newTrackId;
+      }
+    }
+
+    const clientX = e.clientX - rect.left + containerRef.current.scrollLeft;
+    const dropTimeMs = Math.max(0, clientX / pxPerMs);
+
+    const clipId = Math.random().toString(36).substring(2, 9);
+    const newClip: Omit<TimelineClip, 'trackId'> = {
+      id: clipId,
+      assetId: asset.id,
+      type: assetType,
+      name: asset.name,
+      durationMs: asset.durationMs,
+      trimStartMs: 0,
+      trimEndMs: asset.durationMs,
+      positionMs: dropTimeMs,
+      speed: 1.0,
+      volume: 100,
+      fadeInMs: 0,
+      fadeOutMs: 0,
+      transform: {
+        scale: 100,
+        x: 0,
+        y: 0,
+        rotation: 0,
+        uniformScale: true,
+        blendMode: 'normal'
+      }
+    };
+
+    await addClip(targetTrackId, newClip);
     setSelectedClipId(clipId);
   };
 
@@ -399,13 +618,9 @@ export default function Timeline({ height }: { height: number }) {
       // Zoom in/out smoothly
       const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
       setZoom(zoom * zoomFactor);
-    } else {
-      // Horizontal scroll instead of vertical scroll
-      if (containerRef.current && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-        e.preventDefault();
-        containerRef.current.scrollLeft += e.deltaY;
-      }
     }
+    // All other wheel/trackpad gestures (scroll up/down, two-finger scroll)
+    // are handled natively by the browser — no interception.
   };
 
   if (!project) return null;
@@ -500,12 +715,17 @@ export default function Timeline({ height }: { height: number }) {
       return;
     }
 
-    // Clear selection on click/drag start
-    setSelectedClipIds([]);
-
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     
+    // Seek playhead immediately to clicked time
+    const clickX = e.clientX - rect.left + containerRef.current.scrollLeft;
+    const clickTimeMs = Math.max(0, clickX / pxPerMs);
+    setCurrentTime(clickTimeMs);
+
+    // Clear selection on click/drag start
+    setSelectedClipIds([]);
+
     // Coordinates relative to the scrollable container content
     const startX = e.clientX - rect.left + containerRef.current.scrollLeft;
     const startY = e.clientY - rect.top;
@@ -541,11 +761,13 @@ export default function Timeline({ height }: { height: number }) {
 
       const overlappingClipIds: string[] = [];
       const RULER_HEIGHT = 36;
-      const TRACK_HEIGHT = 72;
+      let currentTop = RULER_HEIGHT + 4;
 
-      project.tracks.forEach((track, trackIdx) => {
-        const trackTop = RULER_HEIGHT + 4 + trackIdx * TRACK_HEIGHT;
-        const trackBottom = trackTop + TRACK_HEIGHT;
+      project.tracks.forEach((track) => {
+        const trackHeight = getTrackHeight(track.type);
+        const trackTop = currentTop;
+        const trackBottom = trackTop + trackHeight;
+        currentTop += trackHeight + 6; // Include the 6px margin-bottom gap
 
         const yOverlap = Math.max(0, Math.min(boxBottom, trackBottom) - Math.max(boxTop, trackTop)) > 0;
         if (!yOverlap) return;
@@ -695,20 +917,174 @@ export default function Timeline({ height }: { height: number }) {
 
         const actualDeltaMs = newPos - startPosition;
 
-        updatedTracks = liveProject.tracks.map(t => {
+// Determine which track is hovered vertically (including boundary auto-creation)
+        let targetTrackId = trackId;
+        if (containerRef.current) {
+          const rect = containerRef.current.getBoundingClientRect();
+          // 36 is RULER_HEIGHT, 4 is pt-1 padding
+          const relativeY = moveEvent.clientY - rect.top - 36 - 4;
+          
+          // Calculate tops and bottoms of all tracks
+          let currentTop = 0;
+          const trackTops = new Map<string, number>();
+          const trackHeights = new Map<string, number>();
+          for (const t of liveProject.tracks) {
+            const tHeight = getTrackHeight(t.type);
+            trackTops.set(t.id, currentTop);
+            trackHeights.set(t.id, tHeight);
+            currentTop += tHeight + 6; // Include 6px margin-bottom gap
+          }
+
+          const isClipVisual = clip.type === 'video' || clip.type === 'image';
+          const sameTypeTracks = liveProject.tracks.filter(t => 
+            isClipVisual 
+              ? (t.type === 'video' || (t.type as string) === 'image') 
+              : t.type === clip.type
+          );
+
+          if (sameTypeTracks.length > 0) {
+            const firstTrack = sameTypeTracks[0];
+            const lastTrack = sameTypeTracks[sameTypeTracks.length - 1];
+            const firstTop = trackTops.get(firstTrack.id) || 0;
+            const lastBottom = (trackTops.get(lastTrack.id) || 0) + (trackHeights.get(lastTrack.id) || 0);
+
+            if (relativeY < firstTop - 10) {
+              // Dragged above the first track of this type
+              const isFirstTrackEmpty = firstTrack.clips.every(c => currentSelectedIds.includes(c.id));
+              if (!isFirstTrackEmpty) {
+                // Auto-create a new track at the top of this type
+                const targetType = isClipVisual ? 'video' : clip.type;
+                const newTrackId = Math.random().toString(36).substring(2, 9);
+                const typeLabels: Record<string, string> = {
+                  video: 'Video', audio: 'Audio', text: 'Text'
+                };
+                const existingCount = liveProject.tracks.filter(t => t.type === targetType).length;
+                const newTrack: TimelineTrack = {
+                  id: newTrackId,
+                  name: `${typeLabels[targetType] || 'Video'} ${existingCount + 1}`,
+                  type: targetType as 'video' | 'audio' | 'text',
+                  clips: [],
+                  locked: false,
+                  muted: false,
+                  hidden: false
+                };
+                const idx = liveProject.tracks.findIndex(t => t.id === firstTrack.id);
+                const nextTracks = [...liveProject.tracks];
+                nextTracks.splice(idx, 0, newTrack);
+                
+                const updatedProject = {
+                  ...liveProject,
+                  tracks: nextTracks,
+                  updatedAt: new Date()
+                };
+                useEditorStore.setState({ project: updatedProject });
+                targetTrackId = newTrackId;
+              } else {
+                targetTrackId = firstTrack.id;
+              }
+            } else if (relativeY > lastBottom + 10) {
+              // Dragged below the last track of this type
+              const isLastTrackEmpty = lastTrack.clips.every(c => currentSelectedIds.includes(c.id));
+              if (!isLastTrackEmpty) {
+                // Auto-create a new track at the bottom of this type
+                const targetType = isClipVisual ? 'video' : clip.type;
+                const newTrackId = Math.random().toString(36).substring(2, 9);
+                const typeLabels: Record<string, string> = {
+                  video: 'Video', audio: 'Audio', text: 'Text'
+                };
+                const existingCount = liveProject.tracks.filter(t => t.type === targetType).length;
+                const newTrack: TimelineTrack = {
+                  id: newTrackId,
+                  name: `${typeLabels[targetType] || 'Video'} ${existingCount + 1}`,
+                  type: targetType as 'video' | 'audio' | 'text',
+                  clips: [],
+                  locked: false,
+                  muted: false,
+                  hidden: false
+                };
+                const idx = liveProject.tracks.findIndex(t => t.id === lastTrack.id);
+                const nextTracks = [...liveProject.tracks];
+                nextTracks.splice(idx + 1, 0, newTrack);
+                
+                const updatedProject = {
+                  ...liveProject,
+                  tracks: nextTracks,
+                  updatedAt: new Date()
+                };
+                useEditorStore.setState({ project: updatedProject });
+                targetTrackId = newTrackId;
+              } else {
+                targetTrackId = lastTrack.id;
+              }
+            } else {
+              // Standard hover detection
+              let tempTop = 0;
+              for (const t of liveProject.tracks) {
+                const tHeight = getTrackHeight(t.type);
+                if (relativeY >= tempTop && relativeY < tempTop + tHeight + 6) {
+                  const isTrackVisual = t.type === 'video' || (t.type as string) === 'image';
+                  const isCompatible = (t.type === clip.type) || (isTrackVisual && isClipVisual);
+                  if (isCompatible && !t.locked) {
+                    targetTrackId = t.id;
+                  }
+                  break;
+                }
+                tempTop += tHeight + 6;
+              }
+            }
+          }
+        }
+
+        // 1. Extract moving clips and temporarily assign their targetTrackId
+        const clipsToMove: any[] = [];
+        const tempTracks = liveProject.tracks.map(t => {
+          const remainingClips = [];
+          for (const c of t.clips) {
+            if (currentSelectedIds.includes(c.id)) {
+              clipsToMove.push({
+                ...c,
+                targetTrackId: t.id === trackId ? targetTrackId : t.id
+              });
+            } else {
+              remainingClips.push(c);
+            }
+          }
+          return { ...t, clips: remainingClips };
+        });
+
+        // 2. Re-insert the moving clips into their target tracks
+        updatedTracks = tempTracks.map(t => {
+          const clipsForThisTrack = clipsToMove.filter(c => c.targetTrackId === t.id);
+          
+          let rippleDelta = 0;
+          if (rippleEnabledRef.current && t.id === targetTrackId) {
+            rippleDelta = actualDeltaMs;
+          }
+
+          const updatedClipsForThisTrack = clipsForThisTrack.map(c => {
+            const startPosObj = startPositions.find(sp => sp.id === c.id);
+            const originalStartPos = startPosObj ? startPosObj.pos : c.positionMs;
+            const { targetTrackId: _, ...cleanClip } = c;
+            return {
+              ...cleanClip,
+              positionMs: Math.max(0, originalStartPos + actualDeltaMs)
+            };
+          });
+
+          // Apply ripple shift to other non-moving clips starting at or after the original position
+          const shiftedRemainingClips = t.clips.map(c => {
+            if (rippleDelta !== 0 && c.positionMs >= startPosition) {
+              return {
+                ...c,
+                positionMs: Math.max(0, c.positionMs + rippleDelta)
+              };
+            }
+            return c;
+          });
+
           return {
             ...t,
-            clips: t.clips.map(c => {
-              if (currentSelectedIds.includes(c.id)) {
-                const startPosObj = startPositions.find(sp => sp.id === c.id);
-                const originalStartPos = startPosObj ? startPosObj.pos : c.positionMs;
-                return {
-                  ...c,
-                  positionMs: Math.max(0, originalStartPos + actualDeltaMs)
-                };
-              }
-              return c;
-            })
+            clips: [...shiftedRemainingClips, ...updatedClipsForThisTrack]
           };
         });
 
@@ -754,15 +1130,20 @@ export default function Timeline({ height }: { height: number }) {
           newDur = startDuration - deltaTrim;
         }
 
+        const trimDelta = newPos - startPosition;
         updatedTracks = liveProject.tracks.map(t => {
           if (t.id === trackId) {
             return {
               ...t,
-              clips: t.clips.map(c =>
-                c.id === clip.id
-                  ? { ...c, positionMs: newPos, trimStartMs: newTrimStart, durationMs: newDur, trimEndMs: isImage ? newDur : c.trimEndMs }
-                  : c
-              )
+              clips: t.clips.map(c => {
+                if (c.id === clip.id) {
+                  return { ...c, positionMs: newPos, trimStartMs: newTrimStart, durationMs: newDur, trimEndMs: isImage ? newDur : c.trimEndMs };
+                }
+                if (rippleEnabledRef.current && c.positionMs > startPosition) {
+                  return { ...c, positionMs: Math.max(0, c.positionMs + trimDelta) };
+                }
+                return c;
+              })
             };
           }
           return t;
@@ -802,15 +1183,20 @@ export default function Timeline({ height }: { height: number }) {
 
         if (!snapped) hideSnapLine();
 
+        const trimEndDelta = newDur - startDuration;
         updatedTracks = liveProject.tracks.map(t => {
           if (t.id === trackId) {
             return {
               ...t,
-              clips: t.clips.map(c =>
-                c.id === clip.id
-                  ? { ...c, durationMs: newDur, trimEndMs: newTrimEnd }
-                  : c
-              )
+              clips: t.clips.map(c => {
+                if (c.id === clip.id) {
+                  return { ...c, durationMs: newDur, trimEndMs: newTrimEnd };
+                }
+                if (rippleEnabledRef.current && c.positionMs >= startPosition + startDuration - 10) {
+                  return { ...c, positionMs: Math.max(0, c.positionMs + trimEndDelta) };
+                }
+                return c;
+              })
             };
           }
           return t;
@@ -877,9 +1263,27 @@ export default function Timeline({ height }: { height: number }) {
     return (
       <div 
         onMouseDown={handleRulerMouseDown} 
-        className="relative h-9 border-b border-[#2c2c32] bg-[#0d0d10] cursor-ew-resize w-full flex-shrink-0"
+        className="sticky top-0 h-9 border-b border-[#2c2c32] bg-[#0d0d10] cursor-ew-resize flex-shrink-0 z-40"
+        style={{ minWidth: `${timelineMinWidth}px` }}
       >
         {ticks}
+
+        {/* Playhead Marker (Moved inside sticky ruler to stay vertically fixed) */}
+        <div 
+          ref={playheadRef}
+          className="absolute top-0 bottom-[-4000px] w-[2px] bg-white pointer-events-none z-30 shadow-[0_0_8px_rgba(255,255,255,0.5)]"
+          style={{ left: useEditorStore.getState().currentTime * pxPerMs }}
+        >
+          {/* Playhead Cap / Handle */}
+          <div 
+            ref={playheadTextRef}
+            className="absolute -top-0.5 -left-[22px] min-w-[44px] h-6 px-2 rounded bg-white text-[10px] font-mono font-bold text-black flex items-center justify-center shadow-lg"
+          >
+            {formatRulerTime(useEditorStore.getState().currentTime)}
+          </div>
+          {/* Downward triangle */}
+          <div className="absolute top-[22px] -left-[4px] border-l-[4px] border-r-[4px] border-t-[6px] border-l-transparent border-r-transparent border-t-white" />
+        </div>
       </div>
     );
   };
@@ -1091,13 +1495,7 @@ export default function Timeline({ height }: { height: number }) {
             <Link2 className="w-4 h-4" />
           </button>
 
-          {/* Track Height Toggle */}
-          <button
-            title="Adjust Track Height"
-            className="p-1.5 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition"
-          >
-            <Rows className="w-4 h-4" />
-          </button>
+
 
           {/* Settings */}
           <button
@@ -1138,145 +1536,159 @@ export default function Timeline({ height }: { height: number }) {
 
       {/* Main Tracks Workspace */}
       <div className="flex-1 flex overflow-hidden">
-        
         {/* Fixed Left Gutter Column for Track Controls */}
-        <div className="w-16 border-r border-[#1f1f23] bg-[#0d0d0f] flex flex-col flex-shrink-0 select-none z-25">
+        <div className="w-32 border-r border-[#1f1f23] bg-[#0f0f12] flex flex-col flex-shrink-0 select-none z-25">
           {/* Spacer aligning with Ruler */}
-          <div className="h-9 border-b border-[#1f1f23] bg-[#0a0a0c] flex items-center justify-center text-[9px] uppercase tracking-widest font-bold text-zinc-600">
-            Tracks
-          </div>
+          <div className="h-9 border-b border-[#2c2c32] bg-[#0f0f12]" />
 
           {/* Track Headers */}
-          <div className="flex flex-col pt-1 flex-1 overflow-hidden">
+          <div 
+            ref={headersRef}
+            className="flex flex-col pt-1 flex-1 overflow-y-hidden"
+          >
             {(() => {
-              let videoCount = 0;
-              let audioCount = 0;
-              let imageCount = 0;
-              let textCount = 0;
-
-              return project.tracks.map((track, trackIndex) => {
-                let typeColor = 'border-l-sky-500';
-                let label = '';
+              return project.tracks.map((track) => {
+                let Icon = Type;
+                let iconColor = 'text-zinc-450';
+                
                 if (track.type === 'video') {
-                  typeColor = 'border-l-sky-500';
-                  label = `V${++videoCount}`;
+                  Icon = ImageIcon;
+                  iconColor = 'text-teal-400';
                 } else if (track.type === 'audio') {
-                  typeColor = 'border-l-emerald-500';
-                  label = `A${++audioCount}`;
+                  Icon = Music;
+                  iconColor = 'text-sky-450';
                 } else if (track.type === 'text') {
-                  typeColor = 'border-l-fuchsia-500';
-                  label = `T${++textCount}`;
+                  Icon = Type;
+                  iconColor = 'text-fuchsia-400';
                 } else if (track.type === 'image') {
-                  typeColor = 'border-l-lime-500';
-                  label = `I${++imageCount}`;
+                  Icon = ImageIcon;
+                  iconColor = 'text-lime-400';
                 }
                 
+                const trackHeight = getTrackHeight(track.type);
+                
+                // Determine if this is the first video track (to show the Cover button)
+                const isFirstVideoTrack = track.type === 'video' && project.tracks.find(t => t.type === 'video')?.id === track.id;
+
                 return (
                   <div
                     key={track.id}
-                    className={`h-[72px] border-b border-[#1f1f23]/60 border-l-2 ${typeColor} flex flex-col justify-center items-center gap-0.5 px-0.5 bg-[#111114] text-zinc-400 relative group`}
+                    className="border-b border-[#1f1f23]/60 flex items-center bg-[#0f0f12] relative group select-none overflow-hidden shrink-0"
+                    style={{ height: `${trackHeight}px`, marginBottom: '6px' }}
                   >
-                    {/* Track Icon & Label */}
-                    <div className="flex items-center gap-0.5 text-[9px] font-bold tracking-wide uppercase text-zinc-300 select-none">
-                      {track.type === 'video' ? (
-                        <ImageIcon className="w-3.5 h-3.5 text-sky-400" />
-                      ) : track.type === 'audio' ? (
-                        <Music className="w-3.5 h-3.5 text-emerald-400" />
-                      ) : track.type === 'image' ? (
-                        <ImageIcon className="w-3.5 h-3.5 text-lime-400" />
-                      ) : (
-                        <Type className="w-3.5 h-3.5 text-fuchsia-400" />
-                      )}
-                      <span>{label}</span>
+                    {/* Left Gutter track controls (80px) */}
+                    <div className="flex items-center gap-1.5 w-20 px-1.5 h-full">
+                      <div className="flex items-center gap-1 min-w-[26px]">
+                        <Icon className={`w-3.5 h-3.5 ${iconColor} opacity-70`} />
+                        <span className="text-[9.5px] font-bold text-zinc-500 font-mono tracking-tighter select-none">{getTrackLabel(track)}</span>
+                      </div>
+                      <div className="flex items-center gap-0.5 ml-auto">
+                        {/* Lock/Unlock */}
+                        <button
+                          onClick={() => handleToggleTrackControl(track.id, 'locked')}
+                          title={track.locked ? 'Unlock Track' : 'Lock Track'}
+                          className={`p-0.5 rounded transition ${track.locked ? 'text-amber-500' : 'text-zinc-650 hover:text-zinc-300'}`}
+                        >
+                          {track.locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+                        </button>
+
+                        {/* Mute/Volume (for audio/video) or Eye (for others) */}
+                        {track.type === 'audio' ? (
+                          <button
+                            onClick={() => handleToggleTrackControl(track.id, 'muted')}
+                            title={track.muted ? 'Unmute Audio' : 'Mute Audio'}
+                            className={`p-0.5 rounded transition ${track.muted ? 'text-red-500' : 'text-zinc-650 hover:text-zinc-300'}`}
+                          >
+                            {track.muted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleToggleTrackControl(track.id, 'hidden')}
+                            title={track.hidden ? 'Show Track' : 'Hide Track'}
+                            className={`p-0.5 rounded transition ${track.hidden ? 'text-sky-400' : 'text-zinc-650 hover:text-zinc-350'}`}
+                          >
+                            {track.hidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          </button>
+                        )}
+
+                        {/* Delete Track */}
+                        <button
+                          onClick={() => {
+                            if (track.clips.length > 0 && !confirm(`Delete "${track.name}" and all its clips?`)) return;
+                            removeTrack(track.id);
+                          }}
+                          title="Delete Track"
+                          className="p-0.5 rounded hover:text-red-400 text-zinc-600 transition"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
 
-                    {/* Track controls: lock/mute/hide */}
-                    <div className="flex items-center justify-center gap-0.5">
-                      <button
-                        onClick={() => handleToggleTrackControl(track.id, 'locked')}
-                        title={track.locked ? 'Unlock Track' : 'Lock Track'}
-                        className={`p-1 rounded hover:bg-zinc-800 transition ${track.locked ? 'text-amber-500' : 'text-zinc-600 hover:text-zinc-300'}`}
+                    {/* Right part: Cover button (48px) or Reorder buttons */}
+                    {isFirstVideoTrack ? (
+                      <div 
+                        onClick={() => alert("Select Cover image from frame or upload one!")}
+                        className="w-[40px] h-[calc(100%-8px)] mx-1 border border-dashed border-zinc-700/50 hover:border-zinc-500 rounded bg-zinc-800/10 hover:bg-zinc-800/30 flex flex-col items-center justify-center gap-0.5 cursor-pointer transition select-none shrink-0"
                       >
-                        {track.locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-                      </button>
-
-                      {(track.type === 'audio' || track.type === 'video') && (
+                        <Edit2 className="w-2.5 h-2.5 text-zinc-500" />
+                        <span className="text-[7.5px] font-bold text-zinc-550 uppercase tracking-wide">Cover</span>
+                      </div>
+                    ) : (
+                      <div className="w-12 h-full flex items-center justify-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150 px-0.5 shrink-0">
+                        {/* Move Up */}
                         <button
-                          onClick={() => handleToggleTrackControl(track.id, 'muted')}
-                          title={track.muted ? 'Unmute Audio' : 'Mute Audio'}
-                          className={`p-1 rounded hover:bg-zinc-800 transition ${track.muted ? 'text-red-500' : 'text-zinc-600 hover:text-zinc-300'}`}
+                          onClick={() => reorderTrack(track.id, 'up')}
+                          title="Move Track Up"
+                          className="p-0.5 rounded hover:bg-zinc-800 text-zinc-500 hover:text-sky-400 transition"
                         >
-                          {track.muted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+                          <ChevronUp className="w-3.5 h-3.5" />
                         </button>
-                      )}
-
-                      {(track.type === 'video' || track.type === 'text' || track.type === 'image') && (
+                        {/* Move Down */}
                         <button
-                          onClick={() => handleToggleTrackControl(track.id, 'hidden')}
-                          title={track.hidden ? 'Show Track' : 'Hide Track'}
-                          className={`p-1 rounded hover:bg-zinc-800 transition ${track.hidden ? 'text-sky-400' : 'text-zinc-600 hover:text-zinc-300'}`}
+                          onClick={() => reorderTrack(track.id, 'down')}
+                          title="Move Track Down"
+                          className="p-0.5 rounded hover:bg-zinc-800 text-zinc-500 hover:text-sky-400 transition"
                         >
-                          {track.hidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          <ChevronDown className="w-3.5 h-3.5" />
                         </button>
-                      )}
-                    </div>
-
-                  {/* Reorder + Delete — shown on hover */}
-                  <div className="absolute right-0.5 top-0.5 hidden group-hover:flex flex-col gap-0.5 z-30">
-                    <button
-                      onClick={() => reorderTrack(track.id, 'up')}
-                      disabled={trackIndex === 0}
-                      title="Move track up"
-                      className="p-0.5 rounded bg-zinc-800/90 hover:bg-zinc-700 text-zinc-400 hover:text-white disabled:opacity-20 transition text-[8px] leading-none"
-                    >▲</button>
-                    <button
-                      onClick={() => reorderTrack(track.id, 'down')}
-                      disabled={trackIndex === project.tracks.length - 1}
-                      title="Move track down"
-                      className="p-0.5 rounded bg-zinc-800/90 hover:bg-zinc-700 text-zinc-400 hover:text-white disabled:opacity-20 transition text-[8px] leading-none"
-                    >▼</button>
-                    <button
-                      onClick={() => {
-                        if (track.clips.length > 0 && !confirm(`Delete "${track.name}" and all its clips?`)) return;
-                        removeTrack(track.id);
-                      }}
-                      title="Delete track"
-                      className="p-0.5 rounded bg-red-900/80 hover:bg-red-700 text-red-300 hover:text-white transition text-[8px] leading-none"
-                    >✕</button>
+                      </div>
+                    )}
                   </div>
-                </div>
-              );
-            });
-          })()}
-
-            {/* Add Track buttons */}
-            <div className="flex flex-col gap-1 p-1.5 mt-auto border-t border-[#1f1f23]">
-              <p className="text-[8px] text-zinc-600 text-center uppercase tracking-wider mb-0.5">Add</p>
-              {(['video', 'audio', 'image', 'text'] as const).map(type => (
-                <button
-                  key={type}
-                  onClick={() => addTrack(type)}
-                  title={`Add ${type} track`}
-                  className="flex items-center justify-center gap-0.5 w-full py-0.5 rounded text-[8px] font-medium transition
-                    bg-zinc-800/60 hover:bg-zinc-700 text-zinc-400 hover:text-white"
-                >
-                  <span>+</span>
-                  <span className="capitalize">{type[0].toUpperCase()}</span>
-                </button>
-              ))}
-            </div>
+                );
+              });
+            })()}
           </div>
         </div>
 
         {/* Scrollable Tracks Area */}
         <div 
           ref={containerRef}
+          onScroll={handleScroll}
           onWheel={handleWheel}
           onMouseDown={handleAreaMouseDown}
-          className="flex-1 overflow-x-auto overflow-y-hidden relative bg-[#09090b] custom-scrollbar"
+          onDragOver={handleAreaDragOver}
+          onDrop={handleAreaDrop}
+          className="flex-1 overflow-x-scroll overflow-y-auto relative bg-[#16161a] timeline-scroll"
+          style={{ scrollbarGutter: 'stable' }}
         >
           {/* Ruler */}
           {renderRuler()}
+
+          {/* Empty State */}
+          {project.tracks.every(t => t.clips.length === 0) && (
+            <div 
+              onDragOver={handleAreaDragOver}
+              onDrop={handleAreaDrop}
+              className="absolute inset-x-0 bottom-0 flex flex-col items-center justify-center gap-3 text-zinc-550 select-none cursor-default"
+              style={{ top: '36px' }}
+            >
+              <div className="border border-dashed border-zinc-850 rounded-lg px-10 py-8 bg-[#1a1a1f]/10 hover:bg-[#1a1a1f]/30 hover:border-zinc-750/60 transition flex flex-col items-center justify-center gap-2.5 pointer-events-auto">
+                <FileVideo className="w-8 h-8 text-zinc-650 opacity-55" />
+                <span className="text-xs font-semibold text-zinc-500">Drag material here and start to create</span>
+              </div>
+            </div>
+          )}
 
           {/* Marquee Selection Box */}
           {selectionBox && selectionBox.active && (
@@ -1291,20 +1703,17 @@ export default function Timeline({ height }: { height: number }) {
             />
           )}
           {/* Tracks List */}
-          <div className="flex flex-col relative w-full pt-1">
+          <div className="flex flex-col relative pt-1" style={{ minWidth: `${timelineMinWidth}px` }}>
             {project.tracks.map(track => {
-              let trackBg = 'bg-[#111114]/20';
-              if (track.type === 'video') trackBg = 'bg-sky-950/10';
-              if (track.type === 'image') trackBg = 'bg-lime-950/10';
-              if (track.type === 'audio') trackBg = 'bg-emerald-950/10';
-              if (track.type === 'text') trackBg = 'bg-fuchsia-950/10';
+              const trackHeight = getTrackHeight(track.type);
 
               return (
                 <div 
                   key={track.id}                 
-                  className={`relative h-[72px] border-b border-[#1f1f23]/40 ${
-                    dragOverTrackId === track.id ? 'bg-sky-500/10' : trackBg
-                  } flex items-center transition-colors duration-150`}
+                  className={`relative border-b border-zinc-900 ${
+                    dragOverTrackId === track.id ? 'bg-[#0d1f22]' : 'bg-[#111114]'
+                  } flex items-center transition-colors duration-150 shrink-0`}
+                  style={{ height: `${trackHeight}px`, marginBottom: '6px' }}
                   onDragOver={(e) => handleDragOver(e, track.id)}
                   onDragLeave={handleDragLeave}
                   onDrop={(e) => handleDrop(e, track.id)}
@@ -1313,16 +1722,16 @@ export default function Timeline({ height }: { height: number }) {
                 <div className="relative w-full h-full">
                   {track.clips.map(clip => {
                     const width = clip.durationMs * pxPerMs;
-                    const left = clip.positionMs * pxPerMs;
+                    const left = Math.max(0, clip.positionMs * pxPerMs);
                     const isSelected = selectedClipIds.includes(clip.id);
-                    // Color scheme per clip type
-                    let clipBg = 'bg-[#0e2d33] border-[#1b4b54] hover:border-[#2d7d8c] text-teal-300'; // video
+                    // Reference UI: teal border for video/image, dark blue for audio
+                    let clipBg = 'bg-[#071e22] border-[#1aa3b8] text-teal-200'; // video/image: visible teal border
                     if (clip.type === 'audio') {
-                      clipBg = 'bg-[#0f2042] border-[#18356d] hover:border-[#2653ab] text-blue-350';
+                      clipBg = 'bg-[#07101e] border-[#1a3a6e] text-cyan-300';
                     } else if (clip.type === 'text') {
-                      clipBg = 'bg-[#290f3a] border-[#441a60] hover:border-[#6b2996] text-violet-350';
+                      clipBg = 'bg-[#071e22] border-[#1aa3b8] text-teal-200';
                     } else if (clip.type === 'image') {
-                      clipBg = 'bg-[#162b0f] border-[#2a4f1a] hover:border-[#4a8a2e] text-lime-300';
+                      clipBg = 'bg-[#071e22] border-[#1aa3b8] text-teal-200';
                     }
 
                     return (
@@ -1347,10 +1756,12 @@ export default function Timeline({ height }: { height: number }) {
                           setContextMenu({ x: e.clientX, y: e.clientY, clip, trackId: track.id });
                         }}
                         onMouseDown={(e) => handleClipMouseDown(e, track.id, clip, 'move')}
-                        className={`absolute top-1.5 bottom-1.5 rounded flex flex-col items-start justify-start p-1.5 transition cursor-grab select-none overflow-hidden border ${
+                        className={`absolute ${
+                          track.type === 'video' || track.type === 'audio' ? 'top-0 bottom-0 p-0' : 'top-1 bottom-1 p-1'
+                        } rounded flex flex-col items-start justify-start transition cursor-grab select-none overflow-hidden border ${
                           isSelected
                             ? 'ring-2 ring-offset-0 ring-sky-400 border-sky-400/60 z-20 shadow-[0_0_12px_rgba(56,189,248,0.25)]'
-                            : 'border-transparent'
+                            : ''
                         } ${clipBg} ${deactivatedClips.has(clip.id) ? 'opacity-40' : ''}`}
                         style={{ left, width }}
                         title={clip.name}
@@ -1362,11 +1773,11 @@ export default function Timeline({ height }: { height: number }) {
                           title="Trim Start"
                         />
 
-                        {/* Clip Name & Duration Badge */}
-                        <div className="z-10 flex items-center gap-1.5 px-1.5 py-0.5 bg-black/50 rounded-md text-[11px] text-white font-semibold max-w-full pointer-events-none select-none overflow-hidden backdrop-blur-sm">
+                        {/* Clip Name & Duration — top label floats over filmstrip */}
+                        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-1.5 px-1.5 py-[1.5px] text-[9.5px] font-semibold text-white max-w-full pointer-events-none select-none overflow-hidden drop-shadow-[0_1px_3px_rgba(0,0,0,1)] bg-gradient-to-b from-black/70 to-transparent">
                           <span className="truncate">{clip.name}</span>
                           {clip.type !== 'text' && (
-                            <span className="text-white/50 font-mono text-[10px] shrink-0">
+                            <span className="text-[#5ddcf0] font-mono text-[8px] shrink-0 ml-1">
                               {formatClipDuration(clip.durationMs)}
                             </span>
                           )}
@@ -1374,7 +1785,7 @@ export default function Timeline({ height }: { height: number }) {
 
                         {/* Static image thumbnail for image clips */}
                         {clip.type === 'image' && clip.assetId && thumbnailCache[clip.assetId] && (
-                          <div className="absolute inset-0 overflow-hidden pointer-events-none select-none z-0 opacity-75 rounded">
+                          <div className="absolute left-0 right-0 top-[18px] h-[28px] overflow-hidden pointer-events-none select-none z-0 opacity-75 rounded-sm">
                             <img
                               src={thumbnailCache[clip.assetId][0]}
                               alt=""
@@ -1389,7 +1800,7 @@ export default function Timeline({ height }: { height: number }) {
                           const thumbCount = Math.max(1, Math.ceil(width / thumbWidth));
                           const frames = thumbnailCache[clip.assetId];
                           return (
-                            <div className="absolute inset-0 flex overflow-hidden pointer-events-none select-none z-0 opacity-70 rounded">
+                            <div className="absolute left-0 right-0 top-[18px] h-[28px] flex overflow-hidden pointer-events-none select-none z-0 rounded-sm">
                               {Array.from({ length: thumbCount }).map((_, idx) => {
                                 const frameIdx = Math.min(frames.length - 1, Math.floor((idx / thumbCount) * frames.length));
                                 const imgUrl = frames[frameIdx];
@@ -1407,33 +1818,89 @@ export default function Timeline({ height }: { height: number }) {
                           );
                         })()}
 
-                        {/* Real PCM Waveform or fallback procedural bars for audio clips */}
+                        {/* Audio waveform — orange/amber tip matching reference */}
                         {clip.type === 'audio' && (
-                          <div className="absolute inset-x-2 bottom-1.5 top-[20px] flex items-end gap-[1.5px] opacity-90 pointer-events-none select-none">
+                          <div className="absolute inset-x-1 bottom-[3px] top-[18px] flex items-end gap-[1.5px] opacity-90 pointer-events-none select-none z-10">
                             {clip.assetId && waveformCache[clip.assetId] ? (
                               waveformCache[clip.assetId].map((peak, idx) => (
                                 <div
                                   key={idx}
-                                  className="flex-1 bg-sky-500 rounded-sm relative overflow-hidden"
-                                  style={{ height: `${Math.max(10, peak * 90)}%` }}
+                                  className="flex-1 h-full flex flex-col justify-end gap-0"
                                 >
-                                  {/* Orange top accent */}
-                                  <div className="absolute top-0 left-0 right-0 h-[1.5px] bg-amber-500" />
+                                  {/* Orange peak tip */}
+                                  <div className="w-full h-[2px] bg-orange-400 shrink-0" />
+                                  {/* Cyan/Blue body */}
+                                  <div 
+                                    className="w-full bg-[#1aa3b8] rounded-t-[1px]" 
+                                    style={{ height: `${Math.max(15, peak * 85)}%` }} 
+                                  />
                                 </div>
                               ))
                             ) : (
-                              // Procedural fallback while loading
-                              Array.from({ length: 24 }).map((_, i) => (
-                                <div 
-                                  key={i} 
-                                  className="flex-1 bg-sky-500/50 rounded-sm relative overflow-hidden" 
-                                  style={{ height: `${30 + Math.sin(i * 1.2) * 20}%` }}
-                                >
-                                  <div className="absolute top-0 left-0 right-0 h-[1px] bg-amber-550/80" />
-                                </div>
-                              ))
+                              Array.from({ length: 50 }).map((_, i) => {
+                                const hPercent = 30 + Math.abs(Math.sin(i * 0.8) * 60);
+                                return (
+                                  <div
+                                    key={i}
+                                    className="flex-1 h-full flex flex-col justify-end gap-0"
+                                  >
+                                    {/* Orange peak tip */}
+                                    <div className="w-full h-[1.5px] bg-orange-400 shrink-0" />
+                                    {/* Cyan/Blue body */}
+                                    <div 
+                                      className="w-full bg-[#1aa3b8] rounded-t-[0.5px]" 
+                                      style={{ height: `${hPercent}%` }} 
+                                    />
+                                  </div>
+                                );
+                              })
                             )}
                           </div>
+                        )}
+
+                        {/* Attached mini audio waveform below the filmstrip for video clips */}
+                        {clip.type === 'video' && (
+                          <div className="absolute left-0 right-0 top-[49px] bottom-[3px] flex items-end gap-[1.5px] bg-[#071e22]/50 px-1 pb-[1px] pointer-events-none select-none z-10">
+                            {clip.assetId && waveformCache[clip.assetId] ? (
+                              waveformCache[clip.assetId].slice(0, 36).map((peak, idx) => (
+                                <div
+                                  key={idx}
+                                  className="flex-1 h-full flex flex-col justify-end gap-0"
+                                >
+                                  {/* Orange peak tip */}
+                                  <div className="w-full h-[1px] bg-orange-400 shrink-0" />
+                                  {/* Teal body */}
+                                  <div 
+                                    className="w-full bg-[#1aa3b8] rounded-t-[0.5px]" 
+                                    style={{ height: `${Math.max(10, peak * 80)}%` }} 
+                                  />
+                                </div>
+                              ))
+                            ) : (
+                              Array.from({ length: 36 }).map((_, i) => {
+                                const hPercent = 25 + Math.abs(Math.sin(i * 0.9) * 60);
+                                return (
+                                  <div
+                                    key={i}
+                                    className="flex-1 h-full flex flex-col justify-end gap-0"
+                                  >
+                                    {/* Orange peak tip */}
+                                    <div className="w-full h-[0.5px] bg-orange-400 shrink-0" />
+                                    {/* Teal body */}
+                                    <div 
+                                      className="w-full bg-[#1aa3b8] rounded-t-[0.5px]" 
+                                      style={{ height: `${hPercent}%` }} 
+                                    />
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        )}
+
+                        {/* Teal bottom accent stripe on video/image clips (matches reference UI) */}
+                        {(clip.type === 'video' || clip.type === 'image') && (
+                          <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-[#1ecfed] z-10 pointer-events-none rounded-b opacity-90" />
                         )}
 
                         {/* Right Trim Handle */}
@@ -1463,22 +1930,6 @@ export default function Timeline({ height }: { height: number }) {
             </div>
           )}
 
-          {/* Playhead Marker */}
-          <div 
-            ref={playheadRef}
-            className="absolute top-0 bottom-0 w-[2px] bg-white pointer-events-none z-30 shadow-[0_0_8px_rgba(255,255,255,0.5)]"
-            style={{ left: useEditorStore.getState().currentTime * pxPerMs }}
-          >
-            {/* Playhead Cap / Handle */}
-            <div 
-              ref={playheadTextRef}
-              className="absolute -top-0.5 -left-[22px] min-w-[44px] h-6 px-2 rounded bg-white text-[10px] font-mono font-bold text-black flex items-center justify-center shadow-lg"
-            >
-              {formatRulerTime(useEditorStore.getState().currentTime)}
-            </div>
-            {/* Downward triangle */}
-            <div className="absolute top-[22px] -left-[4px] border-l-[4px] border-r-[4px] border-t-[6px] border-l-transparent border-r-transparent border-t-white" />
-          </div>
       </div>
     </div>
 

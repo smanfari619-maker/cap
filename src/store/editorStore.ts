@@ -17,6 +17,7 @@ interface EditorState {
   selectedClipIds: string[];
   zoom: number; // pixels per second
   upscaleEnabled: boolean;
+  playbackSpeed: number; // For J/K/L shuttle speeds (1, 2, 4, 8, -1, -2, -4, -8)
 
   // Watermark removal
   watermarkRegion: WatermarkRegion | null;
@@ -60,6 +61,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   selectedClipIds: [],
   zoom: 50, // 50 pixels = 1 second (1000ms)
   upscaleEnabled: false,
+  playbackSpeed: 1,
 
   // Watermark removal
   watermarkRegion: null,
@@ -72,9 +74,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   loadProject: async (projectId: string) => {
     const proj = await db.projects.get(projectId);
     if (proj) {
+      // Migrate any legacy 'image' track type to 'video' for unified tracks
+      const migratedTracks = proj.tracks.map(t => {
+        if ((t.type as string) === 'image') {
+          return {
+            ...t,
+            type: 'video' as const,
+            name: t.name.replace('Image', 'Video')
+          };
+        }
+        return t;
+      });
+      const migratedProj = {
+        ...proj,
+        tracks: migratedTracks
+      };
       set({ 
         currentProjectId: projectId, 
-        project: proj, 
+        project: migratedProj, 
         currentTime: 0, 
         isPlaying: false, 
         selectedClipId: null,
@@ -184,9 +201,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const { project, past } = get();
     if (!project) return;
 
+    // Auto-sort tracks by type and layer order:
+    // 1. Text tracks at the top
+    // 2. Image tracks below text
+    // 3. Video tracks below image (V3, V2, V1 - descending track numbers)
+    // 4. Audio tracks at the bottom (A1, A2... - ascending track numbers)
+    const textTracks = tracks.filter(t => t.type === 'text');
+    const imageTracks = tracks.filter(t => (t.type as string) === 'image');
+    const videoTracks = tracks.filter(t => t.type === 'video');
+    const audioTracks = tracks.filter(t => t.type === 'audio');
+
+    // Group by type to preserve timeline layers, but maintain relative user ordering within each group
+    const sortedTracks = [...textTracks, ...imageTracks, ...videoTracks, ...audioTracks];
+
     const updatedProject = {
       ...project,
-      tracks,
+      tracks: sortedTracks,
       updatedAt: new Date()
     };
 

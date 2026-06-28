@@ -123,7 +123,7 @@ export interface Keyframe {
 export interface TimelineTrack {
   id: string;
   name: string;
-  type: 'video' | 'audio' | 'text' | 'image';
+  type: 'video' | 'audio' | 'text';
   clips: TimelineClip[];
   
   // Track status states
