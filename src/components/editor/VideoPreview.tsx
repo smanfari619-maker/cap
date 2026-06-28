@@ -103,13 +103,13 @@ export default function VideoPreview() {
               mediaEl = video;
             }
 
-            // Non-blocking seek logic:
-            // When a seek completes, check if there's a pending seek and execute it.
             const handleSeeked = () => {
               const pending = (mediaEl as any)._pendingSeek;
               if (pending !== undefined) {
                 (mediaEl as any)._pendingSeek = undefined;
                 mediaEl.currentTime = pending;
+              } else {
+                drawRef.current();
               }
             };
             mediaEl.addEventListener('seeked', handleSeeked);
