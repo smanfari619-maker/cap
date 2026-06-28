@@ -1,0 +1,89 @@
+/**
+ * Origin Private File System (OPFS) helper functions.
+ * Storing files in OPFS is secure, fast, and does not block the main thread.
+ * Files are private to this origin and can be read back as standard Blobs/Files.
+ */
+
+/**
+ * Save a File or Blob into OPFS at a given path.
+ * Path should be structured like "projectId/assetId.mp4".
+ */
+export async function saveFileToOPFS(path: string, file: File | Blob): Promise<string> {
+  const root = await navigator.storage.getDirectory();
+  const parts = path.split('/');
+  let currentDir = root;
+
+  // Traverse/create folders
+  for (let i = 0; i < parts.length - 1; i++) {
+    currentDir = await currentDir.getDirectoryHandle(parts[i], { create: true });
+  }
+
+  const fileName = parts[parts.length - 1];
+  const fileHandle = await currentDir.getFileHandle(fileName, { create: true });
+  
+  // Write contents
+  const writable = await fileHandle.createWritable();
+  await writable.write(file);
+  await writable.close();
+
+  return path;
+}
+
+/**
+ * Retrieve a File object from OPFS at the specified path.
+ */
+export async function getFileFromOPFS(path: string): Promise<File> {
+  const root = await navigator.storage.getDirectory();
+  const parts = path.split('/');
+  let currentDir = root;
+
+  for (let i = 0; i < parts.length - 1; i++) {
+    currentDir = await currentDir.getDirectoryHandle(parts[i]);
+  }
+
+  const fileName = parts[parts.length - 1];
+  const fileHandle = await currentDir.getFileHandle(fileName);
+  return await fileHandle.getFile();
+}
+
+/**
+ * Get a temporary DOM URL for the OPFS file (using URL.createObjectURL).
+ * Remember to call URL.revokeObjectURL on the returned string when done!
+ */
+export async function getFileURLFromOPFS(path: string): Promise<string> {
+  const file = await getFileFromOPFS(path);
+  return URL.createObjectURL(file);
+}
+
+/**
+ * Delete a file from OPFS.
+ */
+export async function deleteFileFromOPFS(path: string): Promise<void> {
+  try {
+    const root = await navigator.storage.getDirectory();
+    const parts = path.split('/');
+    let currentDir = root;
+
+    for (let i = 0; i < parts.length - 1; i++) {
+      currentDir = await currentDir.getDirectoryHandle(parts[i]);
+    }
+
+    const fileName = parts[parts.length - 1];
+    await currentDir.removeEntry(fileName);
+  } catch (error) {
+    console.warn(`Could not delete file at ${path} from OPFS:`, error);
+  }
+}
+
+/**
+ * Recursively delete a directory and all its contents in OPFS.
+ * Useful when deleting a project to clean up all its media assets.
+ */
+export async function deleteDirectoryFromOPFS(dirName: string): Promise<void> {
+  try {
+    const root = await navigator.storage.getDirectory();
+    await root.removeEntry(dirName, { recursive: true });
+  } catch (error) {
+    console.warn(`Could not delete directory ${dirName} from OPFS:`, error);
+  }
+}
