@@ -234,6 +234,8 @@ export async function exportProjectWebCodecs(
         await new Promise((resolve) => {
           video.onseeked = resolve;
         });
+        // Allow GPU texture upload
+        await new Promise((resolve) => setTimeout(resolve, 16));
 
         // Set opacity
         let opacity = 1.0;
@@ -267,11 +269,13 @@ export async function exportProjectWebCodecs(
           }
           if (prevClip) {
             const prevVideo = prevClip.assetId ? videoElements.get(prevClip.assetId) : null;
-            if (prevVideo && prevVideo.readyState >= 2) {
+            if (prevVideo) {
               prevVideo.currentTime = prevClip.trimEndMs / 1000;
               await new Promise((resolve) => {
                 prevVideo.onseeked = resolve;
               });
+              // Allow GPU texture upload
+              await new Promise((resolve) => setTimeout(resolve, 16));
               // Calculate aspect ratio preserving destination rectangle for prevVideo
               const prevWidth = prevVideo.videoWidth || renderWidth;
               const prevHeight = prevVideo.videoHeight || renderHeight;
