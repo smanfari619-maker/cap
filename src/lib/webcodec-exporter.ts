@@ -232,8 +232,6 @@ export async function exportProjectWebCodecs(
         await new Promise((resolve) => {
           video.onseeked = resolve;
         });
-        // Allow GPU texture upload
-        await new Promise((resolve) => setTimeout(resolve, 16));
 
         // Set opacity
         let opacity = 1.0;
@@ -285,8 +283,6 @@ export async function exportProjectWebCodecs(
               await new Promise((resolve) => {
                 prevVideo.onseeked = resolve;
               });
-              // Allow GPU texture upload
-              await new Promise((resolve) => setTimeout(resolve, 16));
               // Calculate aspect ratio preserving destination rectangle for prevVideo
               const prevWidth = prevVideo.videoWidth || renderWidth;
               const prevHeight = prevVideo.videoHeight || renderHeight;
@@ -778,9 +774,11 @@ export async function exportProjectWebCodecs(
     const frameProgress = 15 + Math.round((f / totalFrames) * 70);
     onProgress(frameProgress);
 
-    // Yield control to the browser event loop to prevent "Page Unresponsive" freezes
-    // and make the UI / Cancel Render button responsive.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Yield control to the browser event loop once every 10 frames
+    // to prevent freezes while keeping the render loop extremely fast.
+    if (f % 10 === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   }
 
   // Flush video encoder
