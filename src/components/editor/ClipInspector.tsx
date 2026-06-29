@@ -887,9 +887,10 @@ export default function ClipInspector({ width }: { width: number }) {
                             setWmStatus('done');
                             setWatermarkRegion(null);
                           } catch (err: any) {
-                            setWmStatus('error');
-                            setWmError(err?.message || 'Unknown error occurred.');
-                          }
+                             console.error('[Watermark Removal Error]', err);
+                             setWmStatus('error');
+                             setWmError(err?.message ?? String(err) ?? 'Unknown error occurred.');
+                           }
                         }}
                         className="flex-1 py-1.5 rounded-lg text-[9px] font-bold bg-violet-700 hover:bg-violet-600 text-white transition flex items-center justify-center gap-1.5"
                       >

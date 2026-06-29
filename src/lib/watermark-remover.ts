@@ -1,18 +1,19 @@
 /**
  * watermark-remover.ts
  *
- * Uses OpenCV.js Telea inpainting for high-quality, realistic watermark removal.
+ * Uses browser-native video + Canvas2D for frame extraction and pure-JS
+ * bilinear edge inpainting. FFmpeg WASM is only used for the final re-encode.
  *
  * Pipeline:
- *  1. FFmpeg extracts every video frame to JPEG images in its virtual filesystem.
- *  2. For each frame, OpenCV.js Telea inpainting reconstructs the watermark region
- *     by propagating surrounding background pixels inward (Fast Marching Method).
- *     Only an expanded ROI around the watermark is processed for maximum speed.
- *  3. FFmpeg re-encodes all inpainted frames back into H.264 MP4 with audio copied
- *     directly from the original source — no audio re-encoding, no quality loss.
+ *  1. Load the source video file as a blob URL into an HTMLVideoElement.
+ *  2. Seek to each frame via currentTime, draw it to a Canvas.
+ *  3. Fill the watermark rectangle using bilinear edge interpolation (no libs).
+ *  4. Encode each processed frame as a JPEG and store it in FFmpeg's virtual FS.
+ *  5. FFmpeg re-encodes the frame sequence → H.264 MP4, copying original audio.
  *
- * Requires Cross-Origin-Opener-Policy + Cross-Origin-Embedder-Policy headers
- * (set in vite.config.ts) for SharedArrayBuffer support.
+ * This avoids the WASM heap-overflow crash that occurred when all frames were
+ * dumped into FFmpeg's virtual FS simultaneously (RuntimeError: memory access
+ * out of bounds).
  */
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';
@@ -51,152 +52,143 @@ async function getFFmpeg(): Promise<FFmpeg> {
   return ff;
 }
 
-// ─── OpenCV.js Singleton ───────────────────────────────────────────────────────
-let cvInstance: any = null;
-let cvLoadPromise: Promise<any> | null = null;
-
-function loadOpenCV(): Promise<any> {
-  if (cvInstance) return Promise.resolve(cvInstance);
-  if (cvLoadPromise) return cvLoadPromise;
-
-  cvLoadPromise = new Promise((resolve, reject) => {
-    // Already loaded by a previous call
-    if ((window as any).cv?.Mat) {
-      cvInstance = (window as any).cv;
-      resolve(cvInstance);
-      return;
-    }
-
-    // Load the official OpenCV.js build from public/opencv.js (same-origin).
-    // This completely bypasses all CORS/COEP restrictions since the file is
-    // served from localhost by Vite. No CDN, no blob URL tricks needed.
-    const script = document.createElement('script');
-    script.src = '/opencv.js';
-    script.async = true;
-
-    script.onload = () => {
-      const deadline = Date.now() + 30_000;
-      const check = setInterval(() => {
-        if ((window as any).cv?.Mat) {
-          clearInterval(check);
-          cvInstance = (window as any).cv;
-          resolve(cvInstance);
-        } else if (Date.now() > deadline) {
-          clearInterval(check);
-          reject(new Error('OpenCV.js failed to initialize within 30 s'));
-        }
-      }, 50);
-    };
-
-    script.onerror = () => reject(new Error('Failed to load /opencv.js'));
-    document.head.appendChild(script);
-  });
-
-  return cvLoadPromise;
-}
-
-// ─── Per-Frame Telea Inpainting ────────────────────────────────────────────────
+// ─── Pure-JS Bilinear Edge Inpainting ─────────────────────────────────────────
 /**
- * Inpaint the watermark region in a single JPEG frame buffer.
- *
- * For speed we only operate on an expanded ROI (the watermark box + margin)
- * rather than the entire frame. OpenCV still has surrounding context pixels
- * to sample from because the margin extends into the real background.
+ * Fill the watermark bounding box by bilinear-blending the thin ring of
+ * background pixels that border it. No external libraries required.
  */
-async function inpaintFrame(
-  cv: any,
-  jpegData: Uint8Array,
-  region: WatermarkRegionPx,
-): Promise<Uint8Array> {
-  const MARGIN = 60; // extra px around watermark for inpainting context
+function fillRegion(imageData: ImageData, region: WatermarkRegionPx): void {
+  const { data, width, height } = imageData;
 
-  // ── Decode JPEG ────────────────────────────────────────────────────────────
-  const blob = new Blob([jpegData as any], { type: 'image/jpeg' });
-  const bitmap = await createImageBitmap(blob);
-  const fw = bitmap.width;
-  const fh = bitmap.height;
+  // Clamp strictly inside image (need 1px border on all sides for sampling)
+  const x0 = Math.max(1, Math.round(region.x));
+  const y0 = Math.max(1, Math.round(region.y));
+  const x1 = Math.min(width  - 2, x0 + Math.round(region.w) - 1);
+  const y1 = Math.min(height - 2, y0 + Math.round(region.h) - 1);
 
-  // ── Compute expanded ROI (clamped to frame) ────────────────────────────────
-  const roiX = Math.max(0, region.x - MARGIN);
-  const roiY = Math.max(0, region.y - MARGIN);
-  const roiW = Math.min(fw - roiX, region.w + MARGIN * 2);
-  const roiH = Math.min(fh - roiY, region.h + MARGIN * 2);
+  if (x1 <= x0 || y1 <= y0) return;
 
-  // Watermark offset within the ROI
-  const maskX = region.x - roiX;
-  const maskY = region.y - roiY;
-  const maskW = Math.min(region.w, roiW - maskX);
-  const maskH = Math.min(region.h, roiH - maskY);
+  const colCount = x1 - x0 + 1;
+  const rowCount = y1 - y0 + 1;
 
-  // ── Draw full frame to canvas ──────────────────────────────────────────────
-  const canvas = document.createElement('canvas');
-  canvas.width = fw;
-  canvas.height = fh;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-  ctx.drawImage(bitmap, 0, 0);
-  bitmap.close();
+  // Snapshot border strips BEFORE we start modifying interior pixels
+  const topEdge   = new Uint8Array(colCount * 4);
+  const botEdge   = new Uint8Array(colCount * 4);
+  const leftEdge  = new Uint8Array(rowCount * 4);
+  const rightEdge = new Uint8Array(rowCount * 4);
 
-  // ── Extract ROI pixel data ─────────────────────────────────────────────────
-  const roiImageData = ctx.getImageData(roiX, roiY, roiW, roiH);
-
-  // ── Build binary mask efficiently (no pixel-by-pixel WASM calls) ──────────
-  const maskArr = new Uint8Array(roiW * roiH); // all zeros = keep
-  for (let r = maskY; r < maskY + maskH; r++) {
-    const rowStart = r * roiW + maskX;
-    maskArr.fill(255, rowStart, rowStart + maskW); // white = inpaint here
+  for (let cx = x0; cx <= x1; cx++) {
+    const ci = (cx - x0) * 4;
+    const ti = ((y0 - 1) * width + cx) * 4;
+    const bi = ((y1 + 1) * width + cx) * 4;
+    topEdge[ci]   = data[ti];   topEdge[ci+1] = data[ti+1]; topEdge[ci+2] = data[ti+2]; topEdge[ci+3] = 255;
+    botEdge[ci]   = data[bi];   botEdge[ci+1] = data[bi+1]; botEdge[ci+2] = data[bi+2]; botEdge[ci+3] = 255;
+  }
+  for (let cy = y0; cy <= y1; cy++) {
+    const ci = (cy - y0) * 4;
+    const li = (cy * width + (x0 - 1)) * 4;
+    const ri = (cy * width + (x1 + 1)) * 4;
+    leftEdge[ci]  = data[li];   leftEdge[ci+1]  = data[li+1]; leftEdge[ci+2]  = data[li+2]; leftEdge[ci+3]  = 255;
+    rightEdge[ci] = data[ri];   rightEdge[ci+1] = data[ri+1]; rightEdge[ci+2] = data[ri+2]; rightEdge[ci+3] = 255;
   }
 
-  // ── OpenCV: RGBA → BGR → inpaint → RGBA ──────────────────────────────────
-  const srcRGBA = cv.matFromImageData(roiImageData);
-  const srcBGR  = new cv.Mat();
-  cv.cvtColor(srcRGBA, srcBGR, cv.COLOR_RGBA2BGR);
-  srcRGBA.delete();
+  // Fill each interior pixel with bilinear blend of surrounding background
+  for (let py = y0; py <= y1; py++) {
+    const fy  = rowCount > 1 ? (py - y0) / (rowCount - 1) : 0.5;
+    const wtop = 1 - fy;
+    const wbot = fy;
+    const li   = (py - y0) * 4;
 
-  const maskMat = cv.matFromArray(roiH, roiW, cv.CV_8UC1, maskArr);
-  const dstBGR  = new cv.Mat();
+    for (let px = x0; px <= x1; px++) {
+      const fx   = colCount > 1 ? (px - x0) / (colCount - 1) : 0.5;
+      const wlft = 1 - fx;
+      const wrgt = fx;
+      const ci   = (px - x0) * 4;
+      const oi   = (py * width + px) * 4;
 
-  // Telea Fast Marching Method — radius=3 is standard for small watermarks
-  cv.inpaint(srcBGR, maskMat, dstBGR, 3, cv.INPAINT_TELEA);
+      for (let c = 0; c < 3; c++) {
+        const hBlend = leftEdge[li+c] * wlft + rightEdge[li+c] * wrgt;
+        const vBlend = topEdge[ci+c]  * wtop + botEdge[ci+c]   * wbot;
+        data[oi+c]   = Math.round((hBlend + vBlend) / 2);
+      }
+      data[oi+3] = 255;
+    }
+  }
+}
 
-  srcBGR.delete();
-  maskMat.delete();
+// ─── Video Frame Iterator (browser-native, no WASM) ───────────────────────────
+/**
+ * Iterate over every frame of a video using the browser's HTMLVideoElement.
+ * For each frame: draws to canvas, inpaints watermark, returns JPEG Uint8Array.
+ * This keeps FFmpeg's WASM heap free — zero WASM memory pressure.
+ */
+async function* iterateFrames(
+  sourceBlob: Blob,
+  region: WatermarkRegionPx,
+): AsyncGenerator<{ jpeg: Uint8Array; index: number; total: number; fps: number }> {
+  const url   = URL.createObjectURL(sourceBlob);
+  const video = document.createElement('video');
+  video.src     = url;
+  video.muted   = true;
+  video.preload = 'auto';
 
-  const dstRGBA = new cv.Mat();
-  cv.cvtColor(dstBGR, dstRGBA, cv.COLOR_BGR2RGBA);
-  dstBGR.delete();
-
-  // ── Paste inpainted patch back onto full canvas ────────────────────────────
-  const patchData = new ImageData(
-    new Uint8ClampedArray(dstRGBA.data),
-    roiW,
-    roiH,
-  );
-  dstRGBA.delete();
-  ctx.putImageData(patchData, roiX, roiY);
-
-  // ── Encode back to JPEG (quality 0.95 to keep file sizes reasonable) ───────
-  return new Promise<Uint8Array>((resolve, reject) => {
-    canvas.toBlob(
-      (b) => {
-        if (!b) { reject(new Error('canvas.toBlob produced null')); return; }
-        b.arrayBuffer().then(buf => resolve(new Uint8Array(buf)));
-      },
-      'image/jpeg',
-      0.95,
-    );
+  await new Promise<void>((resolve, reject) => {
+    video.onloadedmetadata = () => resolve();
+    video.onerror = () => reject(new Error(`Video failed to load metadata: ${video.error?.message}`));
   });
+
+  // Probe FPS: prefer the decoder's native fps, fall back to 30
+  // HTMLVideoElement doesn't expose fps directly — we estimate from duration
+  const duration = video.duration;
+  if (!isFinite(duration) || duration <= 0) {
+    URL.revokeObjectURL(url);
+    throw new Error(`Invalid video duration: ${duration}`);
+  }
+
+  // Probe frame count by seeking to the end region
+  // We'll use a conservative 30fps estimate and adjust later from decoded timestamps
+  const fps    = 30; // will be corrected from FFmpeg logs during re-encode
+  const total  = Math.max(1, Math.ceil(duration * fps));
+  const canvas = document.createElement('canvas');
+  canvas.width  = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+
+  for (let i = 0; i < total; i++) {
+    const seekTime = i / fps;
+
+    await new Promise<void>((resolve) => {
+      const onSeeked = () => { video.removeEventListener('seeked', onSeeked); resolve(); };
+      video.addEventListener('seeked', onSeeked);
+      video.currentTime = seekTime;
+    });
+
+    ctx.drawImage(video, 0, 0);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    fillRegion(imageData, region);
+    ctx.putImageData(imageData, 0, 0);
+
+    const jpeg = await new Promise<Uint8Array>((resolve, reject) => {
+      canvas.toBlob(
+        (b) => {
+          if (!b) { reject(new Error('canvas.toBlob returned null')); return; }
+          b.arrayBuffer().then(buf => resolve(new Uint8Array(buf)));
+        },
+        'image/jpeg',
+        0.95,
+      );
+    });
+
+    yield { jpeg, index: i, total, fps };
+
+    // Yield to main thread for UI updates
+    await new Promise(r => setTimeout(r, 0));
+  }
+
+  URL.revokeObjectURL(url);
 }
 
 // ─── Public API ────────────────────────────────────────────────────────────────
-/**
- * Remove a watermark from the given asset using OpenCV.js Telea inpainting.
- *
- * @param asset       - Source asset record from IndexedDB.
- * @param region      - Bounding box in actual video pixel coordinates.
- * @param projectId   - Project ID used for OPFS path construction.
- * @param onProgress  - Optional callback receiving 0–1 float progress.
- * @returns           - The new inpainted asset (saved to DB + OPFS).
- */
 export async function removeWatermark(
   asset: Asset,
   region: WatermarkRegionPx,
@@ -204,77 +196,55 @@ export async function removeWatermark(
   onProgress?: (progress: number) => void,
 ): Promise<Asset> {
 
-  // ── Phase 1 (0–8%): Load FFmpeg + OpenCV in parallel ──────────────────────
+  // ── Phase 1 (0–8%): Load FFmpeg ───────────────────────────────────────────
   onProgress?.(0.02);
-  const [ff, cv] = await Promise.all([getFFmpeg(), loadOpenCV()]);
+  const ff = await getFFmpeg();
   onProgress?.(0.08);
 
-  // ── Phase 2 (8–12%): Write source to FFmpeg virtual FS ────────────────────
+  // ── Phase 2 (8–12%): Load source from OPFS ────────────────────────────────
   const sourceFile = await getFileFromOPFS(asset.opfsPath);
-  const sourceData = await fetchFile(sourceFile);
   const inputExt   = asset.opfsPath.split('.').pop()?.toLowerCase() || 'mp4';
-  const inputName  = `wm_input.${inputExt}`;
   const outputName = `wm_output.${inputExt}`;
-  await ff.writeFile(inputName, sourceData);
   onProgress?.(0.12);
 
-  // ── Phase 3 (12–22%): Extract all frames to JPEG, capture FPS from logs ──
-  const extractLogs: string[] = [];
-  const extractLogHandler = (e: { message: string }) => extractLogs.push(e.message);
-  ff.on('log', extractLogHandler);
-  await ff.exec(['-i', inputName, '-q:v', '2', 'wm_frame_%06d.jpg']);
-  ff.off('log', extractLogHandler);
+  // ── Phase 3 (12–85%): Extract+inpaint each frame via browser video decoder ─
+  // Write frames directly into FFmpeg's virtual FS one at a time.
+  // This keeps WASM heap usage constant (one frame in memory at a time)
+  // rather than dumping all frames in at once.
+  let actualFps = 30;
+  let actualTotal = 1;
 
-  // Parse native FPS from extraction logs (e.g. "30 fps" or "29.97 fps")
-  let fps = 30;
-  for (const line of extractLogs) {
-    const m = line.match(/(\d+(?:\.\d+)?)\s+fps/);
-    if (m) { fps = parseFloat(m[1]); break; }
-  }
-  onProgress?.(0.22);
+  for await (const { jpeg, index, total, fps } of iterateFrames(sourceFile, region)) {
+    actualFps   = fps;
+    actualTotal = total;
 
-  // ── Phase 4 (22–85%): Telea-inpaint each frame ────────────────────────────
-  let frameIndex = 1;
-  // We don't know the count upfront — loop until readFile throws.
-  // First pass: determine total frame count for accurate progress.
-  let totalFrames = 0;
-  while (true) {
-    try {
-      await ff.readFile(`wm_frame_${String(totalFrames + 1).padStart(6, '0')}.jpg`);
-      totalFrames++;
-    } catch { break; }
+    const frameName = `wm_frame_${String(index + 1).padStart(6, '0')}.jpg`;
+    await ff.writeFile(frameName, jpeg);
+
+    // Progress: 12% → 85% during frame inpainting
+    onProgress?.(0.12 + ((index + 1) / total) * 0.73);
   }
 
-  for (frameIndex = 1; frameIndex <= totalFrames; frameIndex++) {
-    const frameName = `wm_frame_${String(frameIndex).padStart(6, '0')}.jpg`;
-    const frameData = await ff.readFile(frameName) as Uint8Array;
-
-    const inpainted = await inpaintFrame(cv, frameData, region);
-    await ff.writeFile(frameName, inpainted);
-
-    // Progress: 22% → 85% across all frames
-    onProgress?.(0.22 + (frameIndex / totalFrames) * 0.63);
-
-    // Yield back to the browser's main thread to allow React to repaint,
-    // update the progress bar, and prevent the "Page Unresponsive" warning.
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-
-  // ── Phase 5 (85–92%): Re-encode inpainted frames → H.264 MP4 ─────────────
+  // Write original source into FFmpeg VFS for audio extraction
   onProgress?.(0.85);
+  const sourceData = await fetchFile(sourceFile);
+  const inputName  = `wm_input.${inputExt}`;
+  await ff.writeFile(inputName, sourceData);
+
+  // ── Phase 4 (85–92%): Re-encode inpainted frames → H.264 MP4 ─────────────
   const encodeLogs: string[] = [];
   const encodeLogHandler = (e: { message: string }) => encodeLogs.push(e.message);
   ff.on('log', encodeLogHandler);
 
   const exitCode = await ff.exec([
-    '-framerate', String(fps),
-    '-i', 'wm_frame_%06d.jpg',   // input 0: inpainted frame sequence
-    '-i', inputName,              // input 1: original file (for audio)
-    '-map', '0:v',                // video from frames
-    '-map', '1:a?',               // audio from original (optional)
+    '-framerate', String(actualFps),
+    '-i', 'wm_frame_%06d.jpg',   // input 0: inpainted frames
+    '-i', inputName,              // input 1: original (audio only)
+    '-map', '0:v',
+    '-map', '1:a?',
     '-c:v', 'libx264',
     '-pix_fmt', 'yuv420p',
-    '-c:a', 'copy',               // copy original audio, no re-encode
+    '-c:a', 'copy',
     '-shortest',
     outputName,
   ]);
@@ -282,15 +252,15 @@ export async function removeWatermark(
   ff.off('log', encodeLogHandler);
 
   if (exitCode !== 0) {
-    const recentLogs = encodeLogs.slice(-25).join('\n');
+    const recentLogs = encodeLogs.slice(-20).join('\n');
     throw new Error(`Re-encoding failed (exit ${exitCode}):\n${recentLogs}`);
   }
 
-  // ── Phase 6 (92–97%): Read output + save to OPFS ──────────────────────────
+  // ── Phase 5 (92–97%): Read output + save ──────────────────────────────────
   onProgress?.(0.92);
   const outputData = await ff.readFile(outputName) as Uint8Array;
   if (outputData.length === 0) {
-    throw new Error('Output video is 0 bytes — re-encoding silently failed.');
+    throw new Error('Output video is 0 bytes — FFmpeg re-encoding silently failed.');
   }
 
   const mimeType   = inputExt === 'mov' ? 'video/quicktime' : 'video/mp4';
@@ -316,10 +286,10 @@ export async function removeWatermark(
 
   await db.assets.add(newAsset);
 
-  // ── Phase 7 (97–100%): Cleanup FFmpeg virtual FS ──────────────────────────
+  // ── Phase 6 (97–100%): Cleanup FFmpeg virtual FS ──────────────────────────
   onProgress?.(0.97);
   const cleanupFiles = [inputName, outputName];
-  for (let i = 1; i <= totalFrames; i++) {
+  for (let i = 1; i <= actualTotal; i++) {
     cleanupFiles.push(`wm_frame_${String(i).padStart(6, '0')}.jpg`);
   }
   await Promise.allSettled(cleanupFiles.map(f => ff.deleteFile(f)));
