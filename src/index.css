@@ -149,3 +149,21 @@ input[type="range"]::-moz-range-thumb:hover {
   background: #a78bfa;
   transform: scale(1.2);
 }
+
+/* ── Transition card preview animations ── */
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+@keyframes wipe-preview {
+  0%   { clip-path: inset(0 100% 0 0); }
+  50%  { clip-path: inset(0 0% 0 0); }
+  100% { clip-path: inset(0 100% 0 0); }
+}
+
+/* ── Effect card pulse ── */
+@keyframes effect-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%       { opacity: 0.8; }
+}

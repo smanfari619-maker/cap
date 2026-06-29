@@ -1,10 +1,12 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Film, Music, Upload, Plus, Loader2, Trash2, Sparkles, Search, Sliders, User, ImageIcon, LayoutGrid, List, ArrowUpDown, Filter, Check } from 'lucide-react';
+import { Film, Music, Upload, Plus, Loader2, Trash2, Sparkles, Search, Sliders, User, ImageIcon, LayoutGrid, List, ArrowUpDown, Filter, Check, Zap, X, Clock } from 'lucide-react';
 import { db, type Asset, type TimelineClip } from '../../lib/db';
 import { useEditorStore } from '../../store/editorStore';
 import { saveFileToOPFS, deleteFileFromOPFS } from '../../lib/opfs';
 import { getMediaMetadata } from '../../lib/media-metadata';
+import { EFFECTS_REGISTRY, EFFECT_CATEGORIES } from '../../lib/effects-registry';
+import { TRANSITIONS_REGISTRY, TRANSITION_CATEGORIES } from '../../lib/transitions-registry';
 
 interface LeftSidebarProps {
   activeTab: string;
@@ -299,10 +301,41 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
       return;
     }
     if (type === 'clear') {
-      updateClip(selectedClipId, { transitionType: 'none', fadeInMs: 0 });
+      updateClip(selectedClipId, { transitionType: 'none', fadeInMs: 0, transitionIn: undefined });
     } else {
-      updateClip(selectedClipId, { transitionType: type, fadeInMs: 1000 });
+      updateClip(selectedClipId, {
+        transitionType: type, // keep legacy for compat
+        fadeInMs: 1000,
+        transitionIn: { type, durationMs: 1000, easing: 'ease-in-out' }
+      });
     }
+  };
+
+  const handleApplyEffect = (effectId: string, intensity: number) => {
+    if (!selectedClipId) {
+      alert('Please select a video clip on the timeline first to apply an effect.');
+      return;
+    }
+    const clip = project?.tracks.flatMap(t => t.clips).find(c => c.id === selectedClipId);
+    if (!clip) return;
+    const existing = clip.videoEffects || [];
+    const alreadyApplied = existing.findIndex(e => e.id === effectId);
+    let newEffects;
+    if (alreadyApplied >= 0) {
+      // Update intensity
+      newEffects = existing.map((e, i) => i === alreadyApplied ? { ...e, intensity } : e);
+    } else {
+      newEffects = [...existing, { id: effectId, intensity }];
+    }
+    updateClip(selectedClipId, { videoEffects: newEffects });
+  };
+
+  const handleRemoveEffect = (effectId: string) => {
+    if (!selectedClipId) return;
+    const clip = project?.tracks.flatMap(t => t.clips).find(c => c.id === selectedClipId);
+    if (!clip) return;
+    const newEffects = (clip.videoEffects || []).filter(e => e.id !== effectId);
+    updateClip(selectedClipId, { videoEffects: newEffects });
   };
 
   const handleApplyFilter = (type: string) => {
@@ -797,74 +830,25 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
           </div>
         )}
 
-        {/* Effects Tab (NEW) */}
+        {/* Effects Tab - Full premium redesign */}
         {activeTab === 'effects' && (
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <div className="p-3 border-b border-[#2c2c32]">
-              <h3 className="font-bold text-xs uppercase tracking-wider text-gray-400">Video Effects</h3>
-              <p className="text-[10px] text-gray-500 mt-0.5">Select a clip and click an effect to apply.</p>
-            </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
-              {[
-                { id: 'glow', label: 'Neon Glow', desc: 'Adds a beautiful neon glow intensity' },
-                { id: 'blur', label: 'Soft Focus', desc: 'Slightly blurs the background' },
-                { id: 'shake', label: 'Jitter Shake', desc: 'Adds dynamic viewport shaking' },
-                { id: 'vignette', label: 'Vignette Cinematic', desc: 'Darkens the corners of the frame' }
-              ].map(effect => (
-                <button
-                  key={effect.id}
-                  onClick={() => {
-                    if (!selectedClipId) {
-                      alert('Please select a video clip on the timeline first.');
-                      return;
-                    }
-                    if (effect.id === 'vignette') {
-                      updateClip(selectedClipId, { colorAdjustments: { brightness: 100, contrast: 100, saturation: 100, temp: 0, vignette: 50 } });
-                    } else {
-                      alert(`Applying ${effect.label} effect (simulated).`);
-                    }
-                  }}
-                  className="w-full text-left p-2.5 bg-[#121214] border border-[#2c2c32] hover:border-sky-500 rounded-lg transition"
-                >
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-sky-400" />
-                    <div>
-                      <p className="text-xs font-semibold text-gray-200">{effect.label}</p>
-                      <p className="text-[10px] text-gray-500 mt-0.5">{effect.desc}</p>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
+          <EffectsPanel
+            selectedClipId={selectedClipId}
+            project={project}
+            handleApplyEffect={handleApplyEffect}
+            handleRemoveEffect={handleRemoveEffect}
+            updateClip={updateClip}
+          />
         )}
 
-        {/* Transitions Tab */}
+        {/* Transitions Tab - Full premium redesign */}
         {activeTab === 'transitions' && (
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <div className="p-3 border-b border-[#2c2c32]">
-              <h3 className="font-bold text-xs uppercase tracking-wider text-gray-400">Transitions</h3>
-              <p className="text-[10px] text-gray-500 mt-0.5">Select a clip to apply transition.</p>
-            </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
-              {[
-                { id: 'fade', label: 'Cross-Fade (Dissolve)', desc: 'Gradually blend in from previous clip' },
-                { id: 'slide-left', label: 'Slide Left (Push)', desc: 'Slide in from right to left' },
-                { id: 'slide-right', label: 'Slide Right (Push)', desc: 'Slide in from left to right' },
-                { id: 'zoom', label: 'Zoom In', desc: 'Scale up clip from center' },
-                { id: 'clear', label: 'Clear Transitions', desc: 'Remove transition settings' }
-              ].map(trans => (
-                <button
-                  key={trans.id}
-                  onClick={() => handleApplyTransition(trans.id)}
-                  className="w-full text-left p-2.5 bg-[#121214] border border-[#2c2c32] hover:border-sky-500 rounded-lg transition"
-                >
-                  <p className="text-xs font-semibold text-gray-200">{trans.label}</p>
-                  <p className="text-[10px] text-gray-500 mt-0.5">{trans.desc}</p>
-                </button>
-              ))}
-            </div>
-          </div>
+          <TransitionsPanel
+            selectedClipId={selectedClipId}
+            project={project}
+            handleApplyTransition={handleApplyTransition}
+            updateClip={updateClip}
+          />
         )}
 
         {/* Captions Tab */}
@@ -1001,6 +985,346 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
           </div>
         )}
 
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────── Effects Panel ─────────────────────────── */
+interface EffectsPanelProps {
+  selectedClipId: string | null;
+  project: any;
+  handleApplyEffect: (id: string, intensity: number) => void;
+  handleRemoveEffect: (id: string) => void;
+  updateClip: any;
+}
+
+function EffectsPanel({ selectedClipId, project, handleApplyEffect, handleRemoveEffect }: EffectsPanelProps) {
+  const [activeCategory, setActiveCategory] = useState<string>('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [pendingIntensity, setPendingIntensity] = useState<Record<string, number>>({});
+
+  const selectedClip = selectedClipId
+    ? project?.tracks.flatMap((t: any) => t.clips).find((c: any) => c.id === selectedClipId)
+    : null;
+
+  const appliedEffects: Array<{ id: string; intensity: number }> = selectedClip?.videoEffects || [];
+  const appliedIds = new Set(appliedEffects.map((e: any) => e.id));
+
+  const allEffects = Object.values(EFFECTS_REGISTRY);
+  const filtered = allEffects.filter(e => {
+    const matchCat = activeCategory === 'All' || e.category === activeCategory;
+    const matchSearch = !searchQuery || e.name.toLowerCase().includes(searchQuery.toLowerCase()) || e.description.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchCat && matchSearch;
+  });
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Header */}
+      <div className="p-3 border-b border-[#2c2c32] space-y-2">
+        <div className="flex items-center justify-between">
+          <h3 className="font-bold text-xs uppercase tracking-wider text-gray-400 flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-purple-400" /> Video Effects
+          </h3>
+          {appliedEffects.length > 0 && (
+            <span className="text-[9px] font-bold bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded-full border border-purple-500/30">
+              {appliedEffects.length} applied
+            </span>
+          )}
+        </div>
+        <div className="relative">
+          <Search className="absolute left-2.5 top-2 w-3 h-3 text-gray-500" />
+          <input
+            type="text"
+            placeholder="Search effects..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="w-full bg-[#121214] border border-[#2c2c32] rounded pl-7 pr-3 py-1 text-[10px] text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500 transition"
+          />
+        </div>
+        {/* Category pills */}
+        <div className="flex gap-1 flex-wrap">
+          {(['All', ...EFFECT_CATEGORIES] as string[]).map(cat => (
+            <button
+              key={cat}
+              onClick={() => setActiveCategory(cat)}
+              className={`px-2 py-0.5 rounded text-[9px] font-semibold transition ${activeCategory === cat ? 'bg-purple-600 text-white' : 'bg-[#1e1e22] text-gray-400 hover:text-gray-200 border border-[#2c2c32]'}`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Applied Effects strip */}
+      {appliedEffects.length > 0 && (
+        <div className="px-3 py-2 border-b border-[#2c2c32] space-y-1.5">
+          <p className="text-[9px] font-bold uppercase tracking-wider text-gray-500">Applied</p>
+          {appliedEffects.map((eff: any) => {
+            const def = EFFECTS_REGISTRY[eff.id];
+            if (!def) return null;
+            const intensity = pendingIntensity[eff.id] ?? eff.intensity;
+            return (
+              <div key={eff.id} className="bg-[#1a1a20] border border-purple-500/30 rounded-lg p-2 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold text-purple-300">{def.name}</span>
+                  <button
+                    onClick={() => handleRemoveEffect(eff.id)}
+                    className="text-gray-500 hover:text-red-400 transition"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={intensity}
+                    onChange={e => {
+                      const val = Number(e.target.value);
+                      setPendingIntensity(prev => ({ ...prev, [eff.id]: val }));
+                      handleApplyEffect(eff.id, val);
+                    }}
+                    className="flex-1 h-1 bg-[#2c2c32] rounded-lg appearance-none cursor-pointer accent-purple-500"
+                  />
+                  <span className="text-[9px] font-mono text-gray-400 w-6 text-right">{intensity}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Effect cards grid */}
+      <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
+        <div className="grid grid-cols-2 gap-2">
+          {filtered.map(effect => {
+            const isApplied = appliedIds.has(effect.id);
+            const isHovered = hoveredId === effect.id;
+            return (
+              <div
+                key={effect.id}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/cap-effect-id', effect.id);
+                  e.dataTransfer.effectAllowed = 'copy';
+                }}
+                className={`relative rounded-lg overflow-hidden cursor-pointer border transition-all duration-200 ${isApplied ? 'border-purple-500 shadow-lg shadow-purple-500/20' : 'border-[#2c2c32] hover:border-purple-400/60'}`}
+                onMouseEnter={() => setHoveredId(effect.id)}
+                onMouseLeave={() => setHoveredId(null)}
+                onClick={() => handleApplyEffect(effect.id, EFFECTS_REGISTRY[effect.id]?.defaultIntensity || 60)}
+              >
+                {/* Preview gradient */}
+                <div
+                  className="h-14 w-full relative overflow-hidden"
+                  style={{ background: `linear-gradient(135deg, ${effect.previewColors[0]}, ${effect.previewColors[1]})` }}
+                >
+                  {isHovered && (
+                    <div className="absolute inset-0 animate-pulse opacity-40"
+                      style={{ background: `radial-gradient(circle at 50% 50%, ${effect.previewColors[0]}88, transparent 70%)` }}
+                    />
+                  )}
+                  {isApplied && (
+                    <div className="absolute top-1 right-1 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center shadow">
+                      <Check className="w-2.5 h-2.5 text-white" />
+                    </div>
+                  )}
+                  <div className="absolute bottom-1 left-1.5">
+                    <span className="text-[8px] font-bold text-white/60 uppercase tracking-wider">{effect.category}</span>
+                  </div>
+                </div>
+                {/* Label */}
+                <div className="px-1.5 py-1 bg-[#121214]">
+                  <p className="text-[10px] font-semibold text-gray-200 truncate">{effect.name}</p>
+                  <p className="text-[9px] text-gray-500 truncate leading-tight mt-0.5">{effect.description}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {filtered.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-32 text-center">
+            <Sparkles className="w-6 h-6 text-gray-600 mb-2" />
+            <p className="text-[10px] text-gray-500">No effects found</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────────── Transitions Panel ─────────────────────────── */
+interface TransitionsPanelProps {
+  selectedClipId: string | null;
+  project: any;
+  handleApplyTransition: (type: string) => void;
+  updateClip: any;
+}
+
+function TransitionsPanel({ selectedClipId, project, handleApplyTransition, updateClip }: TransitionsPanelProps) {
+  const [activeCategory, setActiveCategory] = useState<string>('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [transitionDuration, setTransitionDuration] = useState(1000);
+
+  const selectedClip = selectedClipId
+    ? project?.tracks.flatMap((t: any) => t.clips).find((c: any) => c.id === selectedClipId)
+    : null;
+
+  const activeTransType = selectedClip?.transitionIn?.type || selectedClip?.transitionType || null;
+
+  const allTransitions = Object.values(TRANSITIONS_REGISTRY);
+  const filtered = allTransitions.filter(t => {
+    const matchCat = activeCategory === 'All' || t.category === activeCategory;
+    const matchSearch = !searchQuery || t.name.toLowerCase().includes(searchQuery.toLowerCase()) || t.description.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchCat && matchSearch;
+  });
+
+  const handleApplyWithDuration = (type: string) => {
+    if (!selectedClipId) {
+      alert('Please select a video clip on the timeline first to apply a transition.');
+      return;
+    }
+    updateClip(selectedClipId, {
+      transitionType: type,
+      fadeInMs: transitionDuration,
+      transitionIn: { type, durationMs: transitionDuration, easing: 'ease-in-out' }
+    });
+  };
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Header */}
+      <div className="p-3 border-b border-[#2c2c32] space-y-2">
+        <div className="flex items-center justify-between">
+          <h3 className="font-bold text-xs uppercase tracking-wider text-gray-400 flex items-center gap-1.5">
+            <Zap className="w-3.5 h-3.5 text-sky-400" /> Transitions
+          </h3>
+          {activeTransType && (
+            <button
+              onClick={() => handleApplyTransition('clear')}
+              className="text-[9px] text-red-400 hover:text-red-300 transition flex items-center gap-0.5"
+            >
+              <X className="w-2.5 h-2.5" /> Clear
+            </button>
+          )}
+        </div>
+
+        {/* Duration slider */}
+        <div className="space-y-1">
+          <div className="flex justify-between items-center">
+            <label className="text-[9px] font-semibold text-gray-500 uppercase flex items-center gap-1">
+              <Clock className="w-2.5 h-2.5" /> Duration
+            </label>
+            <span className="text-[9px] font-mono text-gray-400">{(transitionDuration / 1000).toFixed(1)}s</span>
+          </div>
+          <input
+            type="range"
+            min={200}
+            max={3000}
+            step={100}
+            value={transitionDuration}
+            onChange={e => setTransitionDuration(Number(e.target.value))}
+            className="w-full h-1 bg-[#2c2c32] rounded-lg appearance-none cursor-pointer accent-sky-500"
+          />
+        </div>
+
+        <div className="relative">
+          <Search className="absolute left-2.5 top-2 w-3 h-3 text-gray-500" />
+          <input
+            type="text"
+            placeholder="Search transitions..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="w-full bg-[#121214] border border-[#2c2c32] rounded pl-7 pr-3 py-1 text-[10px] text-gray-200 placeholder-gray-600 focus:outline-none focus:border-sky-500 transition"
+          />
+        </div>
+        {/* Category pills */}
+        <div className="flex gap-1 flex-wrap">
+          {(['All', ...TRANSITION_CATEGORIES] as string[]).map(cat => (
+            <button
+              key={cat}
+              onClick={() => setActiveCategory(cat)}
+              className={`px-2 py-0.5 rounded text-[9px] font-semibold transition ${activeCategory === cat ? 'bg-sky-600 text-white' : 'bg-[#1e1e22] text-gray-400 hover:text-gray-200 border border-[#2c2c32]'}`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Transition cards grid */}
+      <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
+        <div className="grid grid-cols-2 gap-2">
+          {filtered.map(trans => {
+            const isApplied = activeTransType === trans.id;
+            const isHovered = hoveredId === trans.id;
+            return (
+              <div
+                key={trans.id}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/cap-transition-id', trans.id);
+                  e.dataTransfer.effectAllowed = 'copy';
+                }}
+                className={`relative rounded-lg overflow-hidden cursor-pointer border transition-all duration-200 ${isApplied ? 'border-sky-500 shadow-lg shadow-sky-500/20' : 'border-[#2c2c32] hover:border-sky-400/60'}`}
+                onMouseEnter={() => setHoveredId(trans.id)}
+                onMouseLeave={() => setHoveredId(null)}
+                onClick={() => handleApplyWithDuration(trans.id)}
+              >
+                {/* Preview gradient with animated shimmer on hover */}
+                <div
+                  className="h-14 w-full relative overflow-hidden"
+                  style={{ background: `linear-gradient(135deg, ${trans.previewColors[0]}, ${trans.previewColors[1]})` }}
+                >
+                  {isHovered && (
+                    <>
+                      <div
+                        className="absolute inset-0 transition-all duration-300"
+                        style={{
+                          background: `linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)`,
+                          transform: isHovered ? 'translateX(100%)' : 'translateX(-100%)',
+                          animation: isHovered ? 'shimmer 0.8s ease-in-out' : 'none',
+                        }}
+                      />
+                      {/* Animated diagonal slice to simulate transition */}
+                      <div
+                        className="absolute inset-0"
+                        style={{
+                          background: `linear-gradient(135deg, ${trans.previewColors[1]} 0%, ${trans.previewColors[1]} 40%, transparent 40%)`,
+                          opacity: 0.6,
+                          animation: 'wipe-preview 1.2s ease-in-out infinite',
+                        }}
+                      />
+                    </>
+                  )}
+                  {isApplied && (
+                    <div className="absolute top-1 right-1 w-4 h-4 bg-sky-500 rounded-full flex items-center justify-center shadow">
+                      <Check className="w-2.5 h-2.5 text-white" />
+                    </div>
+                  )}
+                  <div className="absolute bottom-1 left-1.5">
+                    <span className="text-[8px] font-bold text-white/60 uppercase tracking-wider">{trans.category}</span>
+                  </div>
+                </div>
+                {/* Label */}
+                <div className="px-1.5 py-1 bg-[#121214]">
+                  <p className="text-[10px] font-semibold text-gray-200 truncate">{trans.name}</p>
+                  <p className="text-[9px] text-gray-500 truncate leading-tight mt-0.5">{trans.description}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {/* Clear button at bottom */}
+        <button
+          onClick={() => handleApplyTransition('clear')}
+          className="mt-3 w-full py-2 text-[10px] font-semibold text-gray-400 hover:text-red-400 border border-[#2c2c32] hover:border-red-500/40 rounded-lg transition flex items-center justify-center gap-1.5"
+        >
+          <X className="w-3 h-3" /> Remove Transition
+        </button>
       </div>
     </div>
   );

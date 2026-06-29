@@ -5,6 +5,8 @@ import { db } from '../../lib/db';
 import { getFileFromOPFS } from '../../lib/opfs';
 import { parseCubeLUT, applyLut3D, type Lut3D } from '../../lib/lut-solver';
 import { evaluateKeyframe } from '../../lib/keyframe-evaluator';
+import { applyTransitionTransform, drawTransitionOverlay, applyWipeClip } from '../../lib/transitions-registry';
+import { buildEffectFilterString, applyCanvasEffect } from '../../lib/effects-registry';
 
 export default function VideoPreview() {
   const project = useEditorStore(state => state.project);
@@ -14,6 +16,9 @@ export default function VideoPreview() {
   const setIsPlaying = useEditorStore(state => state.setIsPlaying);
   const upscaleEnabled = useEditorStore(state => state.upscaleEnabled);
   const selectedClipId = useEditorStore(state => state.selectedClipId);
+
+  const [isEditingTimecode, setIsEditingTimecode] = useState(false);
+  const [timecodeInputVal, setTimecodeInputVal] = useState('');
   const updateClip = useEditorStore(state => state.updateClip);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
@@ -38,17 +43,31 @@ export default function VideoPreview() {
     const loadMedia = async () => {
       setAssetsLoaded(false);
       
-      // Get all unique asset IDs used in timeline
-      const assetIds = new Set<string>();
+      // Get all clips that need audio/video media element loading
+      const clipMediaSpecs: { clipId: string; assetId: string }[] = [];
+      const activeClipKeys = new Set<string>();
       project.tracks.forEach(track => {
         track.clips.forEach(clip => {
-          if (clip.assetId) assetIds.add(clip.assetId);
+          if (clip.assetId && clip.type !== 'image') {
+            clipMediaSpecs.push({ clipId: clip.id, assetId: clip.assetId });
+            activeClipKeys.add(`${clip.id}_${clip.assetId}`);
+          }
         });
       });
 
-      // Revoke and delete old media elements that are no longer used
-      for (const [id, element] of mediaMap.entries()) {
-        if (!assetIds.has(id)) {
+      // Get all unique image asset IDs
+      const imageAssetIds = new Set<string>();
+      project.tracks.forEach(track => {
+        track.clips.forEach(clip => {
+          if (clip.assetId && clip.type === 'image') {
+            imageAssetIds.add(clip.assetId);
+          }
+        });
+      });
+
+      // Revoke and delete old media elements that are no longer used on the timeline
+      for (const [key, element] of mediaMap.entries()) {
+        if (!activeClipKeys.has(key)) {
           element.pause();
           const src = element.src;
           element.src = '';
@@ -58,14 +77,14 @@ export default function VideoPreview() {
           if (src.startsWith('blob:')) {
             URL.revokeObjectURL(src);
           }
-          mediaMap.delete(id);
+          mediaMap.delete(key);
         }
       }
 
-      // Also clean up old image elements
+      // Clean up old image elements that are no longer used
       const imageMap = imageElementsRef.current;
       for (const [id, element] of imageMap.entries()) {
-        if (!assetIds.has(id)) {
+        if (!imageAssetIds.has(id)) {
           const src = element.src;
           element.src = '';
           if (src.startsWith('blob:')) {
@@ -75,9 +94,10 @@ export default function VideoPreview() {
         }
       }
 
-      // Load new media elements
-      for (const assetId of assetIds) {
-        if (!mediaMap.has(assetId)) {
+      // Load new media elements for audio/video clips (keyed by clipId_assetId for independence)
+      for (const { clipId, assetId } of clipMediaSpecs) {
+        const key = `${clipId}_${assetId}`;
+        if (!mediaMap.has(key)) {
           try {
             const asset = await db.assets.get(assetId);
             if (!asset) continue;
@@ -88,12 +108,6 @@ export default function VideoPreview() {
             let mediaEl: HTMLMediaElement;
             if (asset.type.startsWith('audio/')) {
               mediaEl = new Audio(objectUrl);
-            } else if (asset.type.startsWith('image/')) {
-              // Images: load as HTMLImageElement, not HTMLMediaElement
-              const img = new window.Image();
-              img.src = objectUrl;
-              imageElementsRef.current.set(assetId, img);
-              continue; // skip adding to mediaMap
             } else {
               const video = document.createElement('video');
               video.src = objectUrl;
@@ -114,9 +128,28 @@ export default function VideoPreview() {
             };
             mediaEl.addEventListener('seeked', handleSeeked);
 
-            mediaMap.set(assetId, mediaEl);
+            mediaMap.set(key, mediaEl);
           } catch (error) {
-            console.error(`Failed to load asset ${assetId} from OPFS:`, error);
+            console.error(`Failed to load asset ${assetId} for clip ${clipId} from OPFS:`, error);
+          }
+        }
+      }
+
+      // Load new image assets (keyed by assetId since they are static)
+      for (const assetId of imageAssetIds) {
+        if (!imageMap.has(assetId)) {
+          try {
+            const asset = await db.assets.get(assetId);
+            if (!asset) continue;
+
+            const file = await getFileFromOPFS(asset.opfsPath);
+            const objectUrl = URL.createObjectURL(file);
+
+            const img = new window.Image();
+            img.src = objectUrl;
+            imageMap.set(assetId, img);
+          } catch (error) {
+            console.error(`Failed to load image asset ${assetId} from OPFS:`, error);
           }
         }
       }
@@ -168,8 +201,8 @@ export default function VideoPreview() {
 
     project.tracks.forEach(track => {
       track.clips.forEach(clip => {
-        if (!clip.assetId) return;
-        const media = mediaElementsRef.current.get(clip.assetId);
+        if (!clip.assetId || clip.type === 'image') return;
+        const media = mediaElementsRef.current.get(`${clip.id}_${clip.assetId}`);
         if (!media) return;
 
         const isClipActive = currentTime >= clip.positionMs && currentTime < clip.positionMs + clip.durationMs;
@@ -207,28 +240,34 @@ export default function VideoPreview() {
 
           // Playback sync logic
           if (isPlaying) {
-            // Sync time and play if paused or just beginning clip
-            if (media.paused) {
-              if (media.seeking) {
-                (media as any)._pendingSeek = targetSourceTime;
-              } else {
-                media.currentTime = targetSourceTime;
-              }
-              media.play().catch(() => {});
+            // Cancel any pending scrub seek when playback starts
+            (media as any)._pendingSeek = undefined;
+
+            const isReallyPlaying = !media.paused || (media as any)._playPending;
+
+            if (!isReallyPlaying) {
+              (media as any)._playPending = true;
+              media.currentTime = targetSourceTime;
+              
+              media.play()
+                .then(() => {
+                  (media as any)._playPending = false;
+                })
+                .catch((err) => {
+                  console.warn("Play failed or interrupted:", err);
+                  (media as any)._playPending = false;
+                });
             } else {
-              // Only force seek during playback if drift is very large (> 1.0 second)
+              // Only force seek during playback if drift is very large (> 1.5 seconds)
               // to prevent the HTML5 decoder from stuttering or freezing.
               const drift = Math.abs(media.currentTime - targetSourceTime);
-              if (drift > 1.0) {
-                if (media.seeking) {
-                  (media as any)._pendingSeek = targetSourceTime;
-                } else {
-                  media.currentTime = targetSourceTime;
-                }
+              if (drift > 1.5 && !media.seeking) {
+                media.currentTime = targetSourceTime;
               }
             }
           } else {
             // When scrubbing (paused), always sync current frame for visual feedback
+            (media as any)._playPending = false;
             if (!media.paused) {
               media.pause();
             }
@@ -242,7 +281,7 @@ export default function VideoPreview() {
             }
           }
         } else {
-          // Pause if clip is inactive
+          // Pause if clip is inactive (completely isolated since elements are clip-keyed)
           if (!media.paused) {
             media.pause();
           }
@@ -294,7 +333,15 @@ export default function VideoPreview() {
         const clipOffset = currentTime - clip.positionMs;
         const fadeIn = clip.fadeInMs || 0;
         const fadeOut = clip.fadeOutMs || 0;
-        const hasTransition = clip.transitionType && clip.transitionType !== 'none' && clipOffset < fadeIn;
+
+        // Determine active transition — prefer new transitionIn, fall back to legacy transitionType
+        const activeTrans = clip.transitionIn
+          ? { type: clip.transitionIn.type, durationMs: clip.transitionIn.durationMs }
+          : clip.transitionType && clip.transitionType !== 'none'
+            ? { type: clip.transitionType, durationMs: fadeIn }
+            : null;
+        const hasTransition = !!activeTrans && clipOffset < (activeTrans.durationMs || fadeIn);
+        const transProgress = hasTransition ? clipOffset / (activeTrans!.durationMs || fadeIn) : 1;
 
         if (hasTransition) {
           opacity = 1.0; // Handled inside transition block
@@ -311,12 +358,17 @@ export default function VideoPreview() {
         ctx.save();
         ctx.globalAlpha = Math.max(0, Math.min(opacity, 1.0));
 
+        // Draw dip-to-black / dip-to-white / flash overlay for supported transitions
+        if (hasTransition && activeTrans) {
+          drawTransitionOverlay(ctx, activeTrans.type, transProgress, canvas.width, canvas.height);
+        }
+
         if (clip.type === 'video' && clip.assetId) {
-          const media = mediaElementsRef.current.get(clip.assetId);
+          const media = mediaElementsRef.current.get(`${clip.id}_${clip.assetId}`);
           if (media && media instanceof HTMLVideoElement && media.readyState >= 2) {
             
             // Draw preceding clip's freeze frame if transition is active
-            const isTransActive = clip.transitionType && clip.transitionType !== 'none' && clipOffset < fadeIn;
+            const isTransActive = hasTransition && !!activeTrans;
             if (isTransActive) {
               let prevClip = null;
               const track = project.tracks.find(t => t.clips.some(c => c.id === clip.id));
@@ -329,7 +381,7 @@ export default function VideoPreview() {
               }
 
               if (prevClip) {
-                const prevMedia = prevClip.assetId ? mediaElementsRef.current.get(prevClip.assetId) : null;
+                const prevMedia = prevClip.assetId ? mediaElementsRef.current.get(`${prevClip.id}_${prevClip.assetId}`) : null;
                 if (prevMedia && prevMedia instanceof HTMLVideoElement && prevMedia.readyState >= 2) {
                   // Freeze frame at the end of the previous clip
                   const prevTargetTime = prevClip.trimEndMs / 1000;
@@ -362,6 +414,7 @@ export default function VideoPreview() {
               }
             }
 
+            // Build filter string from colorAdjustments and filterSettings
             let filterString = '';
 
             // Apply color adjustments
@@ -387,6 +440,14 @@ export default function VideoPreview() {
                 filterString += `hue-rotate(300deg) contrast(1.1) saturate(${100 + intensity * 0.5}%) `;
               } else if (type === 'cinematic') {
                 filterString += `contrast(${100 + intensity * 0.2}%) saturate(${100 - intensity * 0.1}%) `;
+              }
+            }
+
+            // Apply CSS-based videoEffects from effects-registry
+            if (clip.videoEffects) {
+              for (const eff of clip.videoEffects) {
+                const effFilter = buildEffectFilterString(eff.id, eff.intensity);
+                if (effFilter) filterString += effFilter + ' ';
               }
             }
 
@@ -422,20 +483,28 @@ export default function VideoPreview() {
             const tScale = rawScale / 100;
 
             ctx.save();
+
+            // Apply wipe clip-region for wipe transitions (before translate)
+            const isWipe = hasTransition && activeTrans && ['wipe-left','wipe-right','wipe-up','wipe-down'].includes(activeTrans.type);
+            if (isWipe && activeTrans) {
+              ctx.save();
+              applyWipeClip(ctx as CanvasRenderingContext2D, activeTrans.type, transProgress, canvas.width, canvas.height);
+            }
+
             ctx.translate(cx + tx, cy + ty);
 
-            // Apply transition animation displacement to incoming clip
-            if (isTransActive) {
-              const p = clipOffset / fadeIn; // transition progress (0.0 to 1.0)
-              if (clip.transitionType === 'fade') {
-                ctx.globalAlpha = p;
-              } else if (clip.transitionType === 'slide-left') {
-                ctx.translate(canvas.width * (1 - p), 0);
-              } else if (clip.transitionType === 'slide-right') {
-                ctx.translate(-canvas.width * (1 - p), 0);
-              } else if (clip.transitionType === 'zoom') {
-                ctx.scale(p, p);
-              }
+            // Apply transition animation: use registry for easing + transform
+            if (hasTransition && activeTrans && !isWipe) {
+              applyTransitionTransform(
+                ctx as CanvasRenderingContext2D,
+                activeTrans.type,
+                transProgress,
+                canvas.width,
+                canvas.height,
+                currentTime
+              );
+            } else if (!hasTransition) {
+              // No-op: drawn normally
             }
 
             if (tRotation !== 0) ctx.rotate((tRotation * Math.PI) / 180);
@@ -474,6 +543,20 @@ export default function VideoPreview() {
 
               offCtx.drawImage(media, dx, dy, dWidth, dHeight);
               offCtx.filter = 'none';
+
+              // Apply canvas-based video effects (pixel ops) from effects-registry
+              if (clip.videoEffects) {
+                for (const eff of clip.videoEffects) {
+                  applyCanvasEffect(
+                    offCtx as CanvasRenderingContext2D,
+                    eff.id,
+                    eff.intensity,
+                    offscreen.width,
+                    offscreen.height,
+                    currentTime
+                  );
+                }
+              }
 
               // Chroma Key Green Screen Removal
               if (clip.chromaKey && clip.chromaKey.enabled) {
@@ -622,6 +705,9 @@ export default function VideoPreview() {
 
               ctx.drawImage(offscreen, -cx, -cy, canvas.width, canvas.height);
             }
+
+            // Close wipe clip region
+            if (isWipe) ctx.restore();
 
             // Render Temperature Tint overlay (in transformed space)
             if (clip.colorAdjustments && clip.colorAdjustments.temp !== 0) {
@@ -872,6 +958,33 @@ export default function VideoPreview() {
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}:${frames.toString().padStart(2, '0')}`;
   };
 
+  const parseTimecode = (text: string, fps: number = 30): number | null => {
+    const parts = text.trim().split(':');
+    if (parts.length === 4) {
+      const h = parseInt(parts[0], 10) || 0;
+      const m = parseInt(parts[1], 10) || 0;
+      const s = parseInt(parts[2], 10) || 0;
+      const f = parseInt(parts[3], 10) || 0;
+      return (h * 3600 + m * 60 + s) * 1000 + f * (1000 / fps);
+    }
+    if (parts.length === 3) {
+      const m = parseInt(parts[0], 10) || 0;
+      const s = parseInt(parts[1], 10) || 0;
+      const f = parseInt(parts[2], 10) || 0;
+      return (m * 60 + s) * 1000 + f * (1000 / fps);
+    }
+    if (parts.length === 2) {
+      const p0 = parseFloat(parts[0]);
+      const p1 = parseFloat(parts[1]);
+      if (isNaN(p0) || isNaN(p1)) return null;
+      return (p0 * 60 + p1) * 1000;
+    }
+    const val = parseFloat(text);
+    if (isNaN(val)) return null;
+    if (val > 1000) return val;
+    return val * 1000;
+  };
+
   const getAspectName = () => {
     if (!project) return 'Original';
     const activeId = getActiveRatioId();
@@ -1025,7 +1138,44 @@ export default function VideoPreview() {
         <div className="flex items-center justify-between w-full px-1">
           {/* Left: Timecode */}
           <div className="text-xs font-mono text-gray-400 flex items-center gap-1">
-            <span className="text-gray-250 font-medium">{formatTimecode(currentTime)}</span>
+            {isEditingTimecode ? (
+              <input
+                type="text"
+                value={timecodeInputVal}
+                onChange={(e) => setTimecodeInputVal(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const parsedMs = parseTimecode(timecodeInputVal, project?.fps || 30);
+                    if (parsedMs !== null) {
+                      setCurrentTime(Math.max(0, Math.min(totalDuration, parsedMs)));
+                    }
+                    setIsEditingTimecode(false);
+                  } else if (e.key === 'Escape') {
+                    setIsEditingTimecode(false);
+                  }
+                }}
+                onBlur={() => {
+                  const parsedMs = parseTimecode(timecodeInputVal, project?.fps || 30);
+                  if (parsedMs !== null) {
+                    setCurrentTime(Math.max(0, Math.min(totalDuration, parsedMs)));
+                  }
+                  setIsEditingTimecode(false);
+                }}
+                className="w-20 bg-zinc-950 border border-zinc-800 rounded px-1 py-0.5 text-[10px] font-mono text-white text-center focus:outline-none focus:border-sky-500"
+                autoFocus
+              />
+            ) : (
+              <span
+                onClick={() => {
+                  setIsEditingTimecode(true);
+                  setTimecodeInputVal(formatTimecode(currentTime));
+                }}
+                className="text-gray-250 font-medium hover:text-sky-400 cursor-pointer transition select-none"
+                title="Click to input timestamp"
+              >
+                {formatTimecode(currentTime)}
+              </span>
+            )}
             <span className="text-gray-600">/</span>
             <span className="text-gray-500">{formatTimecode(totalDuration)}</span>
           </div>

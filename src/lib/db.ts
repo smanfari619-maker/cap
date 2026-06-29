@@ -29,7 +29,20 @@ export interface TimelineClip {
   volume?: number;
   fadeInMs?: number;
   fadeOutMs?: number;
-  transitionType?: string; // 'none' | 'fade' | 'slide-left' | 'slide-right' | 'zoom'
+  transitionType?: string; // legacy — prefer transitionIn
+
+  // Stacked video effects (e.g. glitch, grain, shake) with per-effect intensity
+  videoEffects?: Array<{
+    id: string;        // effect ID from effects-registry.ts
+    intensity: number; // 0-100
+  }>;
+
+  // Structured transition-in (replaces the flat transitionType + fadeInMs pattern)
+  transitionIn?: {
+    type: string;  // transition ID from transitions-registry.ts
+    durationMs: number;
+    easing: 'linear' | 'ease-in-out' | 'ease-in' | 'ease-out';
+  };
 
   // Color adjustments
   colorAdjustments?: {
@@ -155,6 +168,11 @@ class CapCutDatabase extends Dexie {
     });
     // Version 2: adds 'image' clip/track type (schema string unchanged, types are TS-only)
     this.version(2).stores({
+      projects: 'id, title, createdAt, updatedAt',
+      assets: 'id, projectId, type, createdAt'
+    });
+    // Version 3: adds videoEffects[] and transitionIn structured field (TS-only, schema unchanged)
+    this.version(3).stores({
       projects: 'id, title, createdAt, updatedAt',
       assets: 'id, projectId, type, createdAt'
     });

@@ -5,6 +5,8 @@ import { mixAudioTracks } from './audio-mixer';
 import { evaluateKeyframe } from './keyframe-evaluator';
 import { parseCubeLUT, applyLut3D, type Lut3D } from './lut-solver';
 import { initUpscaler, upscaleFrame, isUpscalerReady } from './upscaler';
+import { applyTransitionTransform, drawTransitionOverlay, applyWipeClip } from './transitions-registry';
+import { buildEffectFilterString, applyCanvasEffect } from './effects-registry';
 
 export interface ExportSettings {
   width: number;
@@ -237,7 +239,15 @@ export async function exportProjectWebCodecs(
         let opacity = 1.0;
         const fadeIn = clip.fadeInMs || 0;
         const fadeOut = clip.fadeOutMs || 0;
-        const hasTransition = clip.transitionType && clip.transitionType !== 'none' && offset < fadeIn;
+
+        // Determine active transition — prefer new transitionIn, fall back to legacy transitionType
+        const activeTrans = clip.transitionIn
+          ? { type: clip.transitionIn.type, durationMs: clip.transitionIn.durationMs }
+          : clip.transitionType && clip.transitionType !== 'none'
+            ? { type: clip.transitionType, durationMs: fadeIn }
+            : null;
+        const hasTransition = !!activeTrans && offset < (activeTrans.durationMs || fadeIn);
+        const transProgress = hasTransition ? offset / (activeTrans!.durationMs || fadeIn) : 1;
 
         if (hasTransition) {
           opacity = 1.0;
@@ -253,6 +263,11 @@ export async function exportProjectWebCodecs(
 
         ctx.save();
         ctx.globalAlpha = Math.max(0, Math.min(opacity, 1.0));
+
+        // Draw dip/flash overlay for supported transitions
+        if (hasTransition && activeTrans) {
+          drawTransitionOverlay(ctx as CanvasRenderingContext2D, activeTrans.type, transProgress, renderWidth, renderHeight);
+        }
 
         // Draw preceding clip for transitions
         if (hasTransition) {
@@ -314,6 +329,13 @@ export async function exportProjectWebCodecs(
           else if (type === 'cyberpunk') filterString += `hue-rotate(300deg) contrast(1.1) saturate(${100 + intensity * 0.5}%) `;
           else if (type === 'cinematic') filterString += `contrast(${100 + intensity * 0.2}%) saturate(${100 - intensity * 0.1}%) `;
         }
+        // Apply CSS-based videoEffects from effects-registry
+        if (clip.videoEffects) {
+          for (const eff of clip.videoEffects) {
+            const effFilter = buildEffectFilterString(eff.id, eff.intensity);
+            if (effFilter) filterString += effFilter + ' ';
+          }
+        }
 
         ctx.filter = filterString.trim() || 'none';
 
@@ -332,20 +354,26 @@ export async function exportProjectWebCodecs(
         const tScale = rawScale / 100;
 
         ctx.save();
+
+        // Apply wipe clip-region for wipe transitions (before translate)
+        const isWipe = hasTransition && activeTrans && ['wipe-left','wipe-right','wipe-up','wipe-down'].includes(activeTrans.type);
+        if (isWipe && activeTrans) {
+          ctx.save();
+          applyWipeClip(ctx as CanvasRenderingContext2D, activeTrans.type, transProgress, renderWidth, renderHeight);
+        }
+
         ctx.translate(cx + tx, cy + ty);
 
-        // Apply transition displacement
-        if (hasTransition) {
-          const p = offset / fadeIn;
-          if (clip.transitionType === 'fade') {
-            ctx.globalAlpha = p;
-          } else if (clip.transitionType === 'slide-left') {
-            ctx.translate(renderWidth * (1 - p), 0);
-          } else if (clip.transitionType === 'slide-right') {
-            ctx.translate(-renderWidth * (1 - p), 0);
-          } else if (clip.transitionType === 'zoom') {
-            ctx.scale(p, p);
-          }
+        // Apply transition displacement using registry (with smoothstep easing)
+        if (hasTransition && activeTrans && !isWipe) {
+          applyTransitionTransform(
+            ctx as CanvasRenderingContext2D,
+            activeTrans.type,
+            transProgress,
+            renderWidth,
+            renderHeight,
+            timeMs
+          );
         }
 
         if (tRotation !== 0) ctx.rotate((tRotation * Math.PI) / 180);
@@ -378,6 +406,20 @@ export async function exportProjectWebCodecs(
           offCtx.filter = filterString.trim() || 'none';
           offCtx.drawImage(video, dx, dy, dWidth, dHeight);
           offCtx.filter = 'none';
+
+          // Apply canvas-based video effects (pixel ops) from effects-registry
+          if (clip.videoEffects) {
+            for (const eff of clip.videoEffects) {
+              applyCanvasEffect(
+                offCtx as CanvasRenderingContext2D,
+                eff.id,
+                eff.intensity,
+                renderWidth,
+                renderHeight,
+                timeMs
+              );
+            }
+          }
 
           // Chroma Key Green Screen Removal
           if (clip.chromaKey && clip.chromaKey.enabled) {
@@ -511,11 +553,8 @@ export async function exportProjectWebCodecs(
           drawSource = offscreen;
         }
 
-        if (drawSource === offscreen) {
-          ctx.drawImage(drawSource, -cx, -cy, renderWidth, renderHeight);
-        } else {
-          ctx.drawImage(drawSource, -cx + dx, -cy + dy, dWidth, dHeight);
-        }
+        ctx.drawImage(drawSource, -cx, -cy, renderWidth, renderHeight);
+        if (isWipe) ctx.restore(); // close wipe clip region
 
         // Tint & Vignette overlay inside transformed space
         if (clip.colorAdjustments && clip.colorAdjustments.temp !== 0) {
@@ -641,13 +680,20 @@ export async function exportProjectWebCodecs(
     }
 
     const frame = new VideoFrame(frameSource as CanvasImageSource, { timestamp: (f * 1000000) / fps });
-    videoEncoder.encode(frame);
-    frame.close();
+    try {
+      videoEncoder.encode(frame);
+    } finally {
+      frame.close();
+    }
 
     // Report Progress (from 15% to 85%)
     if (encodeError) throw encodeError;
     const frameProgress = 15 + Math.round((f / totalFrames) * 70);
     onProgress(frameProgress);
+
+    // Yield control to the browser event loop to prevent "Page Unresponsive" freezes
+    // and make the UI / Cancel Render button responsive.
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 
   // Flush video encoder

@@ -136,10 +136,7 @@ export default function WatermarkDrawModal({
           {videoURL ? (
             <div
               ref={containerRef}
-              className="relative max-w-full max-h-[60vh] select-none"
-              style={{
-                aspectRatio: naturalWidth && naturalHeight ? `${naturalWidth} / ${naturalHeight}` : 'auto'
-              }}
+              className="relative select-none inline-block max-w-full max-h-[60vh]"
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
@@ -148,7 +145,7 @@ export default function WatermarkDrawModal({
                 ref={videoRef}
                 src={videoURL}
                 onLoadedMetadata={handleLoadedMetadata}
-                className="w-full h-full object-cover rounded pointer-events-none"
+                className="max-w-full max-h-[60vh] block rounded pointer-events-none"
                 muted
                 playsInline
               />

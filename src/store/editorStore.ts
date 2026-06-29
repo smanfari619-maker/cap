@@ -52,6 +52,122 @@ interface EditorState {
   reorderTrack: (trackId: string, direction: 'up' | 'down') => Promise<void>;
 }
 
+const clipsOverlap = (a: TimelineClip, b: TimelineClip): boolean => {
+  return a.positionMs < b.positionMs + b.durationMs &&
+         a.positionMs + a.durationMs > b.positionMs;
+};
+
+const isBaseTrack = (track: TimelineTrack, allTracks: TimelineTrack[]): boolean => {
+  const sameTypeTracks = allTracks.filter(t => t.type === track.type);
+  return sameTypeTracks.length > 0 && sameTypeTracks[0].id === track.id;
+};
+
+const resolveTrackCollisions = (tracks: TimelineTrack[]): TimelineTrack[] => {
+  let resolvedTracks = [...tracks];
+  let hasCollision = true;
+  let iterations = 0;
+  const maxIterations = 50;
+
+  while (hasCollision && iterations < maxIterations) {
+    hasCollision = false;
+    iterations++;
+
+    let collisionDetected = false;
+    for (const track of resolvedTracks) {
+      if (track.locked) continue; // Skip collisions on locked tracks
+      const clips = [...track.clips].sort((a, b) => a.positionMs - b.positionMs);
+
+      for (let i = 0; i < clips.length; i++) {
+        for (let j = i + 1; j < clips.length; j++) {
+          const clipA = clips[i];
+          const clipB = clips[j];
+
+          if (clipsOverlap(clipA, clipB)) {
+            hasCollision = true;
+            collisionDetected = true;
+
+            let targetTrack: TimelineTrack | null = null;
+            const sameTypeTracks = resolvedTracks.filter(t => t.type === track.type);
+            for (const t of sameTypeTracks) {
+              if (t.id === track.id) continue;
+              if (t.locked) continue;
+              const overlaps = t.clips.some(c => clipsOverlap(c, clipB));
+              if (!overlaps) {
+                targetTrack = t;
+                break;
+              }
+            }
+
+            if (targetTrack) {
+              const targetId = targetTrack.id;
+              resolvedTracks = resolvedTracks.map(t => {
+                if (t.id === track.id) {
+                  return { ...t, clips: t.clips.filter(c => c.id !== clipB.id) };
+                }
+                if (t.id === targetId) {
+                  return {
+                    ...t,
+                    clips: [...t.clips, { ...clipB, trackId: targetId }].sort((a, b) => a.positionMs - b.positionMs)
+                  };
+                }
+                return t;
+              });
+            } else {
+              const newTrackId = Math.random().toString(36).substring(2, 9);
+              const typeLabel = track.type.charAt(0).toUpperCase() + track.type.slice(1);
+              const existingCount = sameTypeTracks.length;
+
+              const newTrack: TimelineTrack = {
+                id: newTrackId,
+                name: `${typeLabel} Track ${existingCount + 1}`,
+                type: track.type,
+                clips: [{ ...clipB, trackId: newTrackId }],
+                locked: false,
+                muted: false,
+                hidden: false
+              };
+
+              if (track.type === 'video' || track.type === 'text') {
+                const firstIdx = resolvedTracks.findIndex(t => t.type === track.type);
+                resolvedTracks = [
+                  ...resolvedTracks.slice(0, firstIdx),
+                  newTrack,
+                  ...resolvedTracks.slice(firstIdx)
+                ];
+              } else {
+                const lastIdx = resolvedTracks.map(t => t.type).lastIndexOf(track.type);
+                resolvedTracks = [
+                  ...resolvedTracks.slice(0, lastIdx + 1),
+                  newTrack,
+                  ...resolvedTracks.slice(lastIdx + 1)
+                ];
+              }
+
+              resolvedTracks = resolvedTracks.map(t => {
+                if (t.id === track.id) {
+                  return { ...t, clips: t.clips.filter(c => c.id !== clipB.id) };
+                }
+                return t;
+              });
+            }
+            break;
+          }
+        }
+        if (collisionDetected) break;
+      }
+      if (collisionDetected) break;
+    }
+  }
+
+  return resolvedTracks;
+};
+
+const cleanupEmptyTracks = (tracks: TimelineTrack[]): TimelineTrack[] => {
+  return tracks.filter(t => {
+    return isBaseTrack(t, tracks) || t.clips.length > 0;
+  });
+};
+
 export const useEditorStore = create<EditorState>((set, get) => ({
   currentProjectId: null,
   project: null,
@@ -201,15 +317,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const { project, past } = get();
     if (!project) return;
 
+    let processedTracks = tracks;
+    if (!skipHistory) {
+      const resolved = resolveTrackCollisions(tracks);
+      processedTracks = cleanupEmptyTracks(resolved);
+    }
+
+    // Ensure all clips have their trackId fields set correctly
+    processedTracks = processedTracks.map(t => ({
+      ...t,
+      clips: t.clips.map(c => c.trackId !== t.id ? { ...c, trackId: t.id } : c)
+    }));
+
     // Auto-sort tracks by type and layer order:
     // 1. Text tracks at the top
     // 2. Image tracks below text
     // 3. Video tracks below image (V3, V2, V1 - descending track numbers)
     // 4. Audio tracks at the bottom (A1, A2... - ascending track numbers)
-    const textTracks = tracks.filter(t => t.type === 'text');
-    const imageTracks = tracks.filter(t => (t.type as string) === 'image');
-    const videoTracks = tracks.filter(t => t.type === 'video');
-    const audioTracks = tracks.filter(t => t.type === 'audio');
+    const textTracks = processedTracks.filter(t => t.type === 'text');
+    const imageTracks = processedTracks.filter(t => (t.type as string) === 'image');
+    const videoTracks = processedTracks.filter(t => t.type === 'video');
+    const audioTracks = processedTracks.filter(t => t.type === 'audio');
 
     // Group by type to preserve timeline layers, but maintain relative user ordering within each group
     const sortedTracks = [...textTracks, ...imageTracks, ...videoTracks, ...audioTracks];
