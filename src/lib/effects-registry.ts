@@ -154,6 +154,33 @@ export const EFFECTS_REGISTRY: Record<string, EffectDef> = {
     previewColors: ['#ed8936', '#7b341e'],
     defaultIntensity: 80,
   },
+  'distort-mirror': {
+    id: 'distort-mirror',
+    name: 'Mirror Kaleidoscope',
+    category: 'Distort',
+    description: 'Split-screen mirroring. Symmetrical kaleidoscopic look.',
+    previewColors: ['#a78bfa', '#e879f9'],
+    defaultIntensity: 100,
+    isCanvasOp: true,
+  },
+  'color-thermal': {
+    id: 'color-thermal',
+    name: 'Thermal Vision',
+    category: 'Color',
+    description: 'Thermal camera simulation. Maps brightness to a vibrant color spectrum.',
+    previewColors: ['#3b82f6', '#ef4444'],
+    defaultIntensity: 80,
+    isCanvasOp: true,
+  },
+  'distort-pixelate': {
+    id: 'distort-pixelate',
+    name: '8-Bit Retro',
+    category: 'Distort',
+    description: 'Retro pixelation. Recreates the aesthetic of 8-bit vintage video games.',
+    previewColors: ['#10b981', '#f59e0b'],
+    defaultIntensity: 50,
+    isCanvasOp: true,
+  },
 };
 
 export const EFFECT_CATEGORIES = ['Blur', 'Glow', 'Distort', 'Camera', 'Color'] as const;
@@ -187,10 +214,22 @@ export function applyCanvasEffect(
   const t = intensity / 100;
 
   if (effectId === 'camera-shake') {
-    const amp = t * 10;
+    const amp = t * 15;
     const dx = (Math.random() - 0.5) * amp * 2;
     const dy = (Math.random() - 0.5) * amp * 2;
-    ctx.translate(dx, dy);
+    
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    const tempCtx = tempCanvas.getContext('2d');
+    if (tempCtx) {
+      tempCtx.drawImage(ctx.canvas, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      ctx.save();
+      ctx.translate(dx, dy);
+      ctx.drawImage(tempCanvas, 0, 0);
+      ctx.restore();
+    }
     return;
   }
 
@@ -274,6 +313,88 @@ export function applyCanvasEffect(
       }
     }
     ctx.putImageData(output, 0, 0);
+    return;
+  }
+
+  if (effectId === 'distort-mirror') {
+    const imgData = ctx.getImageData(0, 0, width, height);
+    const halfW = Math.floor(width / 2);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < halfW; x++) {
+        const leftIdx = (y * width + x) * 4;
+        const rightIdx = (y * width + (width - 1 - x)) * 4;
+        imgData.data[rightIdx] = imgData.data[leftIdx];
+        imgData.data[rightIdx + 1] = imgData.data[leftIdx + 1];
+        imgData.data[rightIdx + 2] = imgData.data[leftIdx + 2];
+        imgData.data[rightIdx + 3] = imgData.data[leftIdx + 3];
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return;
+  }
+
+  if (effectId === 'color-thermal') {
+    const imgData = ctx.getImageData(0, 0, width, height);
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i+1];
+      const b = data[i+2];
+      const l = 0.299 * r + 0.587 * g + 0.114 * b;
+      
+      let tr = 0, tg = 0, tb = 0;
+      if (l < 64) {
+        tr = l * 2;
+        tg = 0;
+        tb = 128 + l * 2;
+      } else if (l < 128) {
+        tr = 128 + (l - 64) * 2;
+        tg = 0;
+        tb = 255 - (l - 64) * 4;
+      } else if (l < 192) {
+        tr = 255;
+        tg = (l - 128) * 4;
+        tb = 0;
+      } else {
+        tr = 255;
+        tg = 255;
+        tb = (l - 192) * 4;
+      }
+      
+      data[i] = r * (1 - t) + tr * t;
+      data[i+1] = g * (1 - t) + tg * t;
+      data[i+2] = b * (1 - t) + tb * t;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return;
+  }
+
+  if (effectId === 'distort-pixelate') {
+    const size = Math.max(2, Math.round(t * 20));
+    const imgData = ctx.getImageData(0, 0, width, height);
+    const data = imgData.data;
+    for (let y = 0; y < height; y += size) {
+      for (let x = 0; x < width; x += size) {
+        const cx = Math.min(width - 1, x + Math.floor(size / 2));
+        const cy = Math.min(height - 1, y + Math.floor(size / 2));
+        const centerIdx = (cy * width + cx) * 4;
+        const r = data[centerIdx];
+        const g = data[centerIdx + 1];
+        const b = data[centerIdx + 2];
+        const a = data[centerIdx + 3];
+
+        for (let dy = 0; dy < size && y + dy < height; dy++) {
+          for (let dx = 0; dx < size && x + dx < width; dx++) {
+            const idx = ((y + dy) * width + (x + dx)) * 4;
+            data[idx] = r;
+            data[idx + 1] = g;
+            data[idx + 2] = b;
+            data[idx + 3] = a;
+          }
+        }
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
     return;
   }
 }

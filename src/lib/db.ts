@@ -16,7 +16,7 @@ export interface Asset {
 export interface TimelineClip {
   id: string;
   assetId?: string; // Undefined for text clips
-  type: 'video' | 'audio' | 'text' | 'image';
+  type: 'video' | 'audio' | 'text' | 'image' | 'effect';
   name: string;
   durationMs: number;
   trimStartMs: number; // Trim start offset in source asset (ms)
@@ -136,13 +136,20 @@ export interface Keyframe {
 export interface TimelineTrack {
   id: string;
   name: string;
-  type: 'video' | 'audio' | 'text';
+  type: 'video' | 'audio' | 'text' | 'effect';
   clips: TimelineClip[];
   
   // Track status states
   locked?: boolean;
   muted?: boolean;
   hidden?: boolean;
+}
+
+export interface TimelineMarker {
+  id: string;
+  timeMs: number;
+  color: 'red' | 'green' | 'blue' | 'yellow' | 'purple';
+  note: string;
 }
 
 export interface Project {
@@ -152,6 +159,7 @@ export interface Project {
   height: number;
   fps: number;
   tracks: TimelineTrack[];
+  markers?: TimelineMarker[];
   createdAt: Date;
   updatedAt: Date;
 }

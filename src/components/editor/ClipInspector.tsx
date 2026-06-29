@@ -1302,6 +1302,10 @@ export default function ClipInspector({ width }: { width: number }) {
                     <option value="cool">Teal Cool</option>
                     <option value="cyberpunk">Cyberpunk Neon</option>
                     <option value="sepia">Rustic Sepia</option>
+                    <option value="pastel">Dreamy Pastel</option>
+                    <option value="forest">Forest Green</option>
+                    <option value="polaroid">Polaroid Film</option>
+                    <option value="vaporwave">Vaporwave</option>
                   </select>
                 </div>
 

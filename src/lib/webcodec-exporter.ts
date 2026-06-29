@@ -652,6 +652,93 @@ export async function exportProjectWebCodecs(
       ctx.restore();
     }
 
+    // Apply global effect track clips during export
+    const effectTracks = project.tracks.filter(t => t.type === 'effect');
+    effectTracks.forEach(track => {
+      if (track.hidden || track.muted) return;
+      track.clips.forEach(clip => {
+        const isActive = timeMs >= clip.positionMs && timeMs < clip.positionMs + clip.durationMs;
+        if (isActive) {
+          // 1. Apply filter settings
+          if (clip.filterSettings && clip.filterSettings.type !== 'none') {
+            const { type, intensity } = clip.filterSettings;
+            let filterStr = '';
+            if (type === 'bw') {
+              filterStr = `grayscale(${intensity}%)`;
+            } else if (type === 'sepia') {
+              filterStr = `sepia(${intensity}%)`;
+            } else if (type === 'vintage') {
+              filterStr = `sepia(${intensity * 0.4}%) hue-rotate(30deg) contrast(${100 - intensity * 0.2}%)`;
+            } else if (type === 'warm') {
+              filterStr = `sepia(${intensity * 0.3}%) saturate(${100 + intensity * 0.2}%)`;
+            } else if (type === 'cool') {
+              filterStr = `hue-rotate(190deg) saturate(${100 + intensity * 0.1}%)`;
+            } else if (type === 'cyberpunk') {
+              filterStr = `hue-rotate(300deg) contrast(1.1) saturate(${100 + intensity * 0.5}%)`;
+            } else if (type === 'cinematic') {
+              filterStr = `contrast(${100 + intensity * 0.2}%) saturate(${100 - intensity * 0.1}%)`;
+            } else if (type === 'pastel') {
+              filterStr = `sepia(${intensity * 0.25}%) saturate(${100 + intensity * 0.3}%) hue-rotate(-15deg) contrast(${100 - intensity * 0.05}%)`;
+            } else if (type === 'forest') {
+              filterStr = `hue-rotate(60deg) saturate(${100 + intensity * 0.1}%) contrast(${100 + intensity * 0.15}%)`;
+            } else if (type === 'polaroid') {
+              filterStr = `contrast(${100 - intensity * 0.15}%) saturate(${100 - intensity * 0.15}%) sepia(${intensity * 0.15}%) brightness(${100 + intensity * 0.05}%)`;
+            } else if (type === 'vaporwave') {
+              filterStr = `hue-rotate(270deg) saturate(${100 + intensity * 0.6}%) contrast(${100 + intensity * 0.1}%)`;
+            }
+
+            if (filterStr) {
+              const offscreen = document.createElement('canvas');
+              offscreen.width = renderWidth;
+              offscreen.height = renderHeight;
+              const offCtx = offscreen.getContext('2d');
+              if (offCtx) {
+                offCtx.drawImage(canvas, 0, 0);
+                ctx.clearRect(0, 0, renderWidth, renderHeight);
+                ctx.save();
+                ctx.filter = filterStr;
+                ctx.drawImage(offscreen, 0, 0);
+                ctx.restore();
+              }
+            }
+          }
+
+          // 2. Apply video effects
+          if (clip.videoEffects && clip.videoEffects.length > 0) {
+            clip.videoEffects.forEach(eff => {
+              const offscreen = document.createElement('canvas');
+              offscreen.width = renderWidth;
+              offscreen.height = renderHeight;
+              const offCtx = offscreen.getContext('2d');
+              if (offCtx) {
+                offCtx.drawImage(canvas, 0, 0);
+                ctx.clearRect(0, 0, renderWidth, renderHeight);
+                
+                const filterStr = buildEffectFilterString(eff.id, eff.intensity);
+                if (filterStr) {
+                  ctx.save();
+                  ctx.filter = filterStr;
+                  ctx.drawImage(offscreen, 0, 0);
+                  ctx.restore();
+                } else {
+                  ctx.drawImage(offscreen, 0, 0);
+                }
+                
+                applyCanvasEffect(
+                  ctx as CanvasRenderingContext2D,
+                  eff.id,
+                  eff.intensity,
+                  renderWidth,
+                  renderHeight,
+                  timeMs
+                );
+              }
+            });
+          }
+        }
+      });
+    });
+
     // Capture and encode frame (with optional AI upscaling or fast enhancement)
     let frameSource: HTMLCanvasElement | OffscreenCanvas = canvas;
 

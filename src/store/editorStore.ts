@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { db, type Project, type TimelineTrack, type TimelineClip } from '../lib/db';
+import { db, type Project, type TimelineTrack, type TimelineClip, type TimelineMarker } from '../lib/db';
 
 export interface WatermarkRegion {
   x: number; // px in video space
@@ -50,6 +50,7 @@ interface EditorState {
   addTrack: (type: TimelineTrack['type']) => Promise<void>;
   removeTrack: (trackId: string) => Promise<void>;
   reorderTrack: (trackId: string, direction: 'up' | 'down') => Promise<void>;
+  updateMarkers: (markers: TimelineMarker[]) => Promise<void>;
 }
 
 const clipsOverlap = (a: TimelineClip, b: TimelineClip): boolean => {
@@ -57,10 +58,7 @@ const clipsOverlap = (a: TimelineClip, b: TimelineClip): boolean => {
          a.positionMs + a.durationMs > b.positionMs;
 };
 
-const isBaseTrack = (track: TimelineTrack, allTracks: TimelineTrack[]): boolean => {
-  const sameTypeTracks = allTracks.filter(t => t.type === track.type);
-  return sameTypeTracks.length > 0 && sameTypeTracks[0].id === track.id;
-};
+
 
 const resolveTrackCollisions = (tracks: TimelineTrack[]): TimelineTrack[] => {
   let resolvedTracks = [...tracks];
@@ -163,9 +161,7 @@ const resolveTrackCollisions = (tracks: TimelineTrack[]): TimelineTrack[] => {
 };
 
 const cleanupEmptyTracks = (tracks: TimelineTrack[]): TimelineTrack[] => {
-  return tracks.filter(t => {
-    return isBaseTrack(t, tracks) || t.clips.length > 0;
-  });
+  return tracks;
 };
 
 export const useEditorStore = create<EditorState>((set, get) => ({
@@ -335,12 +331,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     // 3. Video tracks below image (V3, V2, V1 - descending track numbers)
     // 4. Audio tracks at the bottom (A1, A2... - ascending track numbers)
     const textTracks = processedTracks.filter(t => t.type === 'text');
+    const effectTracks = processedTracks.filter(t => t.type === 'effect');
     const imageTracks = processedTracks.filter(t => (t.type as string) === 'image');
     const videoTracks = processedTracks.filter(t => t.type === 'video');
     const audioTracks = processedTracks.filter(t => t.type === 'audio');
 
     // Group by type to preserve timeline layers, but maintain relative user ordering within each group
-    const sortedTracks = [...textTracks, ...imageTracks, ...videoTracks, ...audioTracks];
+    const sortedTracks = [...textTracks, ...effectTracks, ...imageTracks, ...videoTracks, ...audioTracks];
 
     const updatedProject = {
       ...project,
@@ -368,9 +365,30 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const tracks = project.tracks.map(t => {
       if (t.id === trackId) {
         const fullClip: TimelineClip = { ...clipData, trackId };
+        const combined = [...t.clips, fullClip];
+        
+        // Sort: new clip first if positions are equal
+        const sorted = combined.sort((a, b) => {
+          if (a.positionMs !== b.positionMs) {
+            return a.positionMs - b.positionMs;
+          }
+          if (a.id === fullClip.id) return -1;
+          if (b.id === fullClip.id) return 1;
+          return 0;
+        });
+
+        // Resolve overlaps
+        for (let i = 1; i < sorted.length; i++) {
+          const prev = sorted[i - 1];
+          const curr = sorted[i];
+          if (curr.positionMs < prev.positionMs + prev.durationMs) {
+            curr.positionMs = prev.positionMs + prev.durationMs;
+          }
+        }
+
         return {
           ...t,
-          clips: [...t.clips, fullClip].sort((a, b) => a.positionMs - b.positionMs)
+          clips: sorted
         };
       }
       return t;
@@ -476,7 +494,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const { project } = get();
     if (!project) return;
     const typeLabels: Record<string, string> = {
-      video: 'Video', audio: 'Audio', text: 'Text', image: 'Image'
+      video: 'Video', audio: 'Audio', text: 'Text', image: 'Image', effect: 'Effects'
     };
     const existingCount = project.tracks.filter(t => t.type === type).length;
     const newTrack: TimelineTrack = {
@@ -508,5 +526,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (swapIdx < 0 || swapIdx >= tracks.length) return;
     [tracks[idx], tracks[swapIdx]] = [tracks[swapIdx], tracks[idx]];
     await get().updateTracks(tracks);
+  },
+
+  updateMarkers: async (markers) => {
+    const { project, past } = get();
+    if (!project) return;
+    const updatedProject = {
+      ...project,
+      markers,
+      updatedAt: new Date()
+    };
+    const currentSerialized = JSON.stringify(project);
+    set({
+      project: updatedProject,
+      past: [...past, currentSerialized],
+      future: []
+    });
+    await db.projects.put(updatedProject);
   },
 }));

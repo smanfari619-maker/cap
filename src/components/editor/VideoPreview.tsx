@@ -33,6 +33,64 @@ export default function VideoPreview() {
   const [assetsLoaded, setAssetsLoaded] = useState(false);
   const [totalDuration, setTotalDuration] = useState(0);
 
+  // Web Audio Context and Routing references for real-time audio EQ preview
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const audioNodesRef = useRef<Map<string, {
+    source: MediaElementAudioSourceNode;
+    lowFilter: BiquadFilterNode;
+    midFilter: BiquadFilterNode;
+    highFilter: BiquadFilterNode;
+  }>>(new Map());
+
+  const getAudioContext = () => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    if (audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
+    }
+    return audioCtxRef.current;
+  };
+
+  const setupAudioRouting = (key: string, mediaEl: HTMLMediaElement) => {
+    try {
+      const audioCtx = getAudioContext();
+      if (audioNodesRef.current.has(key)) return;
+
+      const source = audioCtx.createMediaElementSource(mediaEl);
+      
+      const lowFilter = audioCtx.createBiquadFilter();
+      lowFilter.type = 'lowshelf';
+      lowFilter.frequency.value = 250;
+      lowFilter.gain.value = 0;
+
+      const midFilter = audioCtx.createBiquadFilter();
+      midFilter.type = 'peaking';
+      midFilter.Q.value = 1.0;
+      midFilter.frequency.value = 1000;
+      midFilter.gain.value = 0;
+
+      const highFilter = audioCtx.createBiquadFilter();
+      highFilter.type = 'highshelf';
+      highFilter.frequency.value = 4000;
+      highFilter.gain.value = 0;
+
+      source.connect(lowFilter);
+      lowFilter.connect(midFilter);
+      midFilter.connect(highFilter);
+      highFilter.connect(audioCtx.destination);
+
+      audioNodesRef.current.set(key, {
+        source,
+        lowFilter,
+        midFilter,
+        highFilter
+      });
+    } catch (err) {
+      console.warn("Failed to setup Web Audio routing for", key, err);
+    }
+  };
+
   // 1. Load project media files from OPFS and create Blob URLs
   useEffect(() => {
     if (!project) return;
@@ -78,6 +136,18 @@ export default function VideoPreview() {
             URL.revokeObjectURL(src);
           }
           mediaMap.delete(key);
+
+          // Clean up audio nodes for unused media elements
+          const nodes = audioNodesRef.current.get(key);
+          if (nodes) {
+            try {
+              nodes.source.disconnect();
+              nodes.lowFilter.disconnect();
+              nodes.midFilter.disconnect();
+              nodes.highFilter.disconnect();
+            } catch (err) {}
+            audioNodesRef.current.delete(key);
+          }
         }
       }
 
@@ -170,15 +240,31 @@ export default function VideoPreview() {
   useEffect(() => {
     return () => {
       const mediaMap = mediaElementsRef.current;
-      for (const [_, element] of mediaMap.entries()) {
+      for (const [key, element] of mediaMap.entries()) {
         element.pause();
         const src = element.src;
         element.src = '';
         if (src.startsWith('blob:')) {
           URL.revokeObjectURL(src);
         }
+
+        // Clean up audio nodes
+        const nodes = audioNodesRef.current.get(key);
+        if (nodes) {
+          try {
+            nodes.source.disconnect();
+            nodes.lowFilter.disconnect();
+            nodes.midFilter.disconnect();
+            nodes.highFilter.disconnect();
+          } catch (err) {}
+        }
       }
       mediaMap.clear();
+      audioNodesRef.current.clear();
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close();
+        audioCtxRef.current = null;
+      }
     };
   }, []);
 
@@ -199,6 +285,11 @@ export default function VideoPreview() {
   useEffect(() => {
     if (!project || !assetsLoaded) return;
 
+    // Wake up Web Audio context on playback start
+    if (isPlaying) {
+      getAudioContext();
+    }
+
     project.tracks.forEach(track => {
       track.clips.forEach(clip => {
         if (!clip.assetId || clip.type === 'image') return;
@@ -206,8 +297,24 @@ export default function VideoPreview() {
         if (!media) return;
 
         const isClipActive = currentTime >= clip.positionMs && currentTime < clip.positionMs + clip.durationMs;
+        const key = `${clip.id}_${clip.assetId}`;
 
         if (isClipActive) {
+          // Setup audio filters routing
+          setupAudioRouting(key, media);
+
+          // Synchronize audio Equalizer settings
+          const nodes = audioNodesRef.current.get(key);
+          if (nodes) {
+            const lowGain = clip.audioEQ?.low ?? 0;
+            const midGain = clip.audioEQ?.mid ?? 0;
+            const highGain = clip.audioEQ?.high ?? 0;
+
+            if (nodes.lowFilter.gain.value !== lowGain) nodes.lowFilter.gain.value = lowGain;
+            if (nodes.midFilter.gain.value !== midGain) nodes.midFilter.gain.value = midGain;
+            if (nodes.highFilter.gain.value !== highGain) nodes.highFilter.gain.value = highGain;
+          }
+
           const speed = clip.speed || 1.0;
           const clipOffset = currentTime - clip.positionMs;
           const targetSourceTime = (clip.trimStartMs + (clipOffset * speed)) / 1000;
@@ -364,8 +471,9 @@ export default function VideoPreview() {
         }
 
         if (clip.type === 'video' && clip.assetId) {
-          const media = mediaElementsRef.current.get(`${clip.id}_${clip.assetId}`);
-          if (media && media instanceof HTMLVideoElement && media.readyState >= 2) {
+          const isAIAvatar = clip.assetId.startsWith('avatar_');
+          const media = !isAIAvatar ? mediaElementsRef.current.get(`${clip.id}_${clip.assetId}`) : null;
+          if (isAIAvatar || (media && media instanceof HTMLVideoElement && media.readyState >= 2)) {
             
             // Draw preceding clip's freeze frame if transition is active
             const isTransActive = hasTransition && !!activeTrans;
@@ -440,6 +548,14 @@ export default function VideoPreview() {
                 filterString += `hue-rotate(300deg) contrast(1.1) saturate(${100 + intensity * 0.5}%) `;
               } else if (type === 'cinematic') {
                 filterString += `contrast(${100 + intensity * 0.2}%) saturate(${100 - intensity * 0.1}%) `;
+              } else if (type === 'pastel') {
+                filterString += `sepia(${intensity * 0.25}%) saturate(${100 + intensity * 0.3}%) hue-rotate(-15deg) contrast(${100 - intensity * 0.05}%) `;
+              } else if (type === 'forest') {
+                filterString += `hue-rotate(60deg) saturate(${100 + intensity * 0.1}%) contrast(${100 + intensity * 0.15}%) `;
+              } else if (type === 'polaroid') {
+                filterString += `contrast(${100 - intensity * 0.15}%) saturate(${100 - intensity * 0.15}%) sepia(${intensity * 0.15}%) brightness(${100 + intensity * 0.05}%) `;
+              } else if (type === 'vaporwave') {
+                filterString += `hue-rotate(270deg) saturate(${100 + intensity * 0.6}%) contrast(${100 + intensity * 0.1}%) `;
               }
             }
 
@@ -520,28 +636,36 @@ export default function VideoPreview() {
             if (offCtx) {
               offCtx.filter = filterString.trim() || 'none';
               
-              // Calculate aspect ratio preserving destination rectangle (contain fit)
-              const videoWidth = (media as HTMLVideoElement).videoWidth || offscreen.width;
-              const videoHeight = (media as HTMLVideoElement).videoHeight || offscreen.height;
-              const srcRatio = videoWidth / videoHeight;
-              const destRatio = offscreen.width / offscreen.height;
-              
-              let dWidth = offscreen.width;
-              let dHeight = offscreen.height;
-              let dx = 0;
-              let dy = 0;
-              
-              if (srcRatio > destRatio) {
-                // Letterbox
-                dHeight = offscreen.width / srcRatio;
-                dy = (offscreen.height - dHeight) / 2;
-              } else {
-                // Pillarbox
-                dWidth = offscreen.height * srcRatio;
-                dx = (offscreen.width - dWidth) / 2;
-              }
+              if (isAIAvatar) {
+                const preset = clip.assetId.substring(7);
+                offCtx.save();
+                offCtx.translate(offscreen.width / 2, offscreen.height / 2);
+                drawAIAvatar(offCtx as CanvasRenderingContext2D, preset, clipOffset, offscreen.width, offscreen.height, isPlaying);
+                offCtx.restore();
+              } else if (media && media instanceof HTMLVideoElement) {
+                // Calculate aspect ratio preserving destination rectangle (contain fit)
+                const videoWidth = media.videoWidth || offscreen.width;
+                const videoHeight = (media as HTMLVideoElement).videoHeight || offscreen.height;
+                const srcRatio = videoWidth / videoHeight;
+                const destRatio = offscreen.width / offscreen.height;
+                
+                let dWidth = offscreen.width;
+                let dHeight = offscreen.height;
+                let dx = 0;
+                let dy = 0;
+                
+                if (srcRatio > destRatio) {
+                  // Letterbox
+                  dHeight = offscreen.width / srcRatio;
+                  dy = (offscreen.height - dHeight) / 2;
+                } else {
+                  // Pillarbox
+                  dWidth = offscreen.height * srcRatio;
+                  dx = (offscreen.width - dWidth) / 2;
+                }
 
-              offCtx.drawImage(media, dx, dy, dWidth, dHeight);
+                offCtx.drawImage(media, dx, dy, dWidth, dHeight);
+              }
               offCtx.filter = 'none';
 
               // Apply canvas-based video effects (pixel ops) from effects-registry
@@ -802,6 +926,93 @@ export default function VideoPreview() {
         }
 
         ctx.restore();
+      });
+
+      // Apply global effect track clips (Effects Layer)
+      const effectTracks = project.tracks.filter(t => t.type === 'effect');
+      effectTracks.forEach(track => {
+        if (track.hidden || track.muted) return;
+        track.clips.forEach(clip => {
+          const isActive = currentTime >= clip.positionMs && currentTime < clip.positionMs + clip.durationMs;
+          if (isActive) {
+            // 1. Apply filter settings (if a filter is placed on the effect track)
+            if (clip.filterSettings && clip.filterSettings.type !== 'none') {
+              const { type, intensity } = clip.filterSettings;
+              let filterStr = '';
+              if (type === 'bw') {
+                filterStr = `grayscale(${intensity}%)`;
+              } else if (type === 'sepia') {
+                filterStr = `sepia(${intensity}%)`;
+              } else if (type === 'vintage') {
+                filterStr = `sepia(${intensity * 0.4}%) hue-rotate(30deg) contrast(${100 - intensity * 0.2}%)`;
+              } else if (type === 'warm') {
+                filterStr = `sepia(${intensity * 0.3}%) saturate(${100 + intensity * 0.2}%)`;
+              } else if (type === 'cool') {
+                filterStr = `hue-rotate(190deg) saturate(${100 + intensity * 0.1}%)`;
+              } else if (type === 'cyberpunk') {
+                filterStr = `hue-rotate(300deg) contrast(1.1) saturate(${100 + intensity * 0.5}%)`;
+              } else if (type === 'cinematic') {
+                filterStr = `contrast(${100 + intensity * 0.2}%) saturate(${100 - intensity * 0.1}%)`;
+              } else if (type === 'pastel') {
+                filterStr = `sepia(${intensity * 0.25}%) saturate(${100 + intensity * 0.3}%) hue-rotate(-15deg) contrast(${100 - intensity * 0.05}%)`;
+              } else if (type === 'forest') {
+                filterStr = `hue-rotate(60deg) saturate(${100 + intensity * 0.1}%) contrast(${100 + intensity * 0.15}%)`;
+              } else if (type === 'polaroid') {
+                filterStr = `contrast(${100 - intensity * 0.15}%) saturate(${100 - intensity * 0.15}%) sepia(${intensity * 0.15}%) brightness(${100 + intensity * 0.05}%)`;
+              } else if (type === 'vaporwave') {
+                filterStr = `hue-rotate(270deg) saturate(${100 + intensity * 0.6}%) contrast(${100 + intensity * 0.1}%)`;
+              }
+
+              if (filterStr) {
+                const offscreen = document.createElement('canvas');
+                offscreen.width = canvas.width;
+                offscreen.height = canvas.height;
+                const offCtx = offscreen.getContext('2d');
+                if (offCtx) {
+                  offCtx.drawImage(canvas, 0, 0);
+                  ctx.clearRect(0, 0, canvas.width, canvas.height);
+                  ctx.save();
+                  ctx.filter = filterStr;
+                  ctx.drawImage(offscreen, 0, 0);
+                  ctx.restore();
+                }
+              }
+            }
+
+            // 2. Apply video effects (if an effect is placed on the effect track)
+            if (clip.videoEffects && clip.videoEffects.length > 0) {
+              clip.videoEffects.forEach(eff => {
+                const offscreen = document.createElement('canvas');
+                offscreen.width = canvas.width;
+                offscreen.height = canvas.height;
+                const offCtx = offscreen.getContext('2d');
+                if (offCtx) {
+                  offCtx.drawImage(canvas, 0, 0);
+                  ctx.clearRect(0, 0, canvas.width, canvas.height);
+                  
+                  const filterStr = buildEffectFilterString(eff.id, eff.intensity);
+                  if (filterStr) {
+                    ctx.save();
+                    ctx.filter = filterStr;
+                    ctx.drawImage(offscreen, 0, 0);
+                    ctx.restore();
+                  } else {
+                    ctx.drawImage(offscreen, 0, 0);
+                  }
+                  
+                  applyCanvasEffect(
+                    ctx as CanvasRenderingContext2D,
+                    eff.id,
+                    eff.intensity,
+                    canvas.width,
+                    canvas.height,
+                    currentTime
+                  );
+                }
+              });
+            }
+          }
+        });
       });
     };
 
@@ -1284,4 +1495,163 @@ export default function VideoPreview() {
       </div>
     </div>
   );
+}
+
+function drawAIAvatar(
+  ctx: CanvasRenderingContext2D,
+  preset: string,
+  clipOffsetMs: number,
+  width: number,
+  height: number,
+  isPlaying: boolean
+) {
+  const size = Math.min(width, height) * 0.45;
+
+  ctx.save();
+
+  // Background card for avatar (centered at 0,0)
+  ctx.fillStyle = '#111827';
+  ctx.beginPath();
+  ctx.arc(0, 0, size * 0.9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = preset === 'sarah' || preset === 'elena' ? '#ec4899' : '#06b6d4';
+  ctx.stroke();
+
+  // 1. Neck
+  ctx.fillStyle = '#fed7aa'; // Neck skin
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.15, size * 0.2);
+  ctx.lineTo(size * 0.15, size * 0.2);
+  ctx.lineTo(size * 0.12, size * 0.45);
+  ctx.lineTo(-size * 0.12, size * 0.45);
+  ctx.closePath();
+  ctx.fill();
+
+  // Shirt / body outline
+  ctx.fillStyle = '#e2e8f0';
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.25, size * 0.4);
+  ctx.quadraticCurveTo(-size * 0.4, size * 0.6, -size * 0.5, size * 0.75);
+  ctx.lineTo(size * 0.5, size * 0.75);
+  ctx.quadraticCurveTo(size * 0.4, size * 0.6, size * 0.25, size * 0.4);
+  ctx.closePath();
+  ctx.fill();
+
+  // Suit / clothes
+  ctx.fillStyle = preset === 'sarah' ? '#1e3a8a' : preset === 'david' ? '#0f172a' : preset === 'elena' ? '#be185d' : '#0369a1';
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.45, size * 0.75);
+  ctx.lineTo(-size * 0.2, size * 0.45);
+  ctx.lineTo(0, size * 0.6);
+  ctx.lineTo(size * 0.2, size * 0.45);
+  ctx.lineTo(size * 0.45, size * 0.75);
+  ctx.closePath();
+  ctx.fill();
+
+  // Tie / collar details
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.08, size * 0.45);
+  ctx.lineTo(0, size * 0.54);
+  ctx.lineTo(size * 0.08, size * 0.45);
+  ctx.lineTo(0, size * 0.6);
+  ctx.closePath();
+  ctx.fill();
+
+  // 2. Head (Skin tone)
+  ctx.fillStyle = '#fed7aa'; 
+  ctx.beginPath();
+  ctx.arc(0, 0, size * 0.38, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 3. Eyes (Blinking animation)
+  const isBlinking = (Math.floor(clipOffsetMs / 3000) % 2 === 0) && (clipOffsetMs % 3000 < 150);
+  ctx.fillStyle = '#1e293b';
+  
+  if (isBlinking) {
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#1e293b';
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.14, -size * 0.05);
+    ctx.lineTo(-size * 0.04, -size * 0.05);
+    ctx.moveTo(size * 0.04, -size * 0.05);
+    ctx.lineTo(size * 0.14, -size * 0.05);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.arc(-size * 0.09, -size * 0.05, size * 0.035, 0, Math.PI * 2);
+    ctx.arc(size * 0.09, -size * 0.05, size * 0.035, 0, Math.PI * 2);
+    ctx.fill();
+    // Pupils
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(-size * 0.10, -size * 0.06, size * 0.012, 0, Math.PI * 2);
+    ctx.arc(size * 0.08, -size * 0.06, size * 0.012, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 4. Eyebrows
+  ctx.strokeStyle = '#475569';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  // Left eyebrow
+  ctx.arc(-size * 0.09, -size * 0.12, size * 0.05, Math.PI * 1.15, Math.PI * 1.85);
+  // Right eyebrow
+  ctx.arc(size * 0.09, -size * 0.12, size * 0.05, Math.PI * 1.15, Math.PI * 1.85);
+  ctx.stroke();
+
+  // 5. Hair
+  ctx.fillStyle = preset === 'sarah' ? '#78350f' : preset === 'david' ? '#1e293b' : preset === 'elena' ? '#d97706' : '#b45309';
+  if (preset === 'sarah' || preset === 'elena') {
+    // Long hair outline
+    ctx.beginPath();
+    ctx.arc(0, -size * 0.12, size * 0.42, Math.PI * 0.9, Math.PI * 2.1);
+    ctx.quadraticCurveTo(size * 0.45, size * 0.4, size * 0.4, size * 0.6);
+    ctx.lineTo(-size * 0.4, size * 0.6);
+    ctx.quadraticCurveTo(-size * 0.45, size * 0.4, -size * 0.42, -size * 0.12);
+    ctx.fill();
+    
+    // Bangs
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.38, -size * 0.08);
+    ctx.quadraticCurveTo(-size * 0.2, -size * 0.35, 0, -size * 0.25);
+    ctx.quadraticCurveTo(size * 0.2, -size * 0.35, size * 0.38, -size * 0.08);
+    ctx.quadraticCurveTo(0, -size * 0.45, -size * 0.38, -size * 0.08);
+    ctx.fill();
+  } else {
+    // Short hair
+    ctx.beginPath();
+    ctx.arc(0, -size * 0.08, size * 0.41, Math.PI * 1.0, Math.PI * 2.0);
+    ctx.quadraticCurveTo(0, -size * 0.45, -size * 0.41, -size * 0.08);
+    ctx.fill();
+  }
+
+  // 6. Mouth (Talking animation)
+  ctx.fillStyle = '#dc2626';
+  ctx.beginPath();
+  const mouthOpenFactor = isPlaying ? Math.max(0.1, Math.abs(Math.sin(clipOffsetMs * 0.012))) : 0.15;
+  const mouthH = size * 0.08 * mouthOpenFactor;
+  const mouthW = size * 0.13;
+  
+  ctx.moveTo(-mouthW/2, size * 0.16);
+  ctx.quadraticCurveTo(0, size * 0.13, mouthW/2, size * 0.16);
+  ctx.quadraticCurveTo(0, size * 0.16 + mouthH * 2, -mouthW/2, size * 0.16);
+  ctx.fill();
+
+  if (mouthOpenFactor > 0.4) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(-mouthW * 0.3, size * 0.16 + 1, mouthW * 0.6, 2);
+  }
+
+  // 7. Label tag
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+  ctx.fillRect(-size * 0.35, size * 0.33, size * 0.7, size * 0.12);
+  ctx.fillStyle = '#38bdf8';
+  ctx.font = `bold ${Math.round(size * 0.065)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(preset.toUpperCase() + ' (AI)', 0, size * 0.39);
+
+  ctx.restore();
 }

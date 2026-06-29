@@ -7,6 +7,7 @@ import { saveFileToOPFS, deleteFileFromOPFS } from '../../lib/opfs';
 import { getMediaMetadata } from '../../lib/media-metadata';
 import { EFFECTS_REGISTRY, EFFECT_CATEGORIES } from '../../lib/effects-registry';
 import { TRANSITIONS_REGISTRY, TRANSITION_CATEGORIES } from '../../lib/transitions-registry';
+import heroImg from '../../assets/hero.png';
 
 interface LeftSidebarProps {
   activeTab: string;
@@ -22,9 +23,15 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
   const project = useEditorStore(state => state.project);
   const selectedClipId = useEditorStore(state => state.selectedClipId);
   const setSelectedClipId = useEditorStore(state => state.setSelectedClipId);
+  const selectedClip = selectedClipId
+    ? project?.tracks.flatMap((t: any) => t.clips).find((c: any) => c.id === selectedClipId)
+    : null;
+  const activeFilter = selectedClip?.filterSettings?.type || 'none';
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isGeneratingCaptions, setIsGeneratingCaptions] = useState(false);
+  const [captionsProgress, setCaptionsProgress] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [mediaCategory, setMediaCategory] = useState<'all' | 'yours' | 'ai' | 'library'>('all');
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({});
@@ -43,10 +50,217 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
     [currentProjectId]
   ) || [];
 
+  // Filter and Sort assets based on criteria
+  const filteredAssets = assets
+    .filter(asset => {
+      // Search query
+      if (searchQuery && !asset.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+        return false;
+      }
+      // Filter Type
+      if (filterType === 'video') return asset.type.startsWith('video/');
+      if (filterType === 'audio') return asset.type.startsWith('audio/');
+      if (filterType === 'image') return asset.type.startsWith('image/');
+      return true;
+    })
+    .sort((a, b) => {
+      let comparison = 0;
+      if (sortBy === 'name') {
+        comparison = a.name.localeCompare(b.name);
+      } else if (sortBy === 'type') {
+        comparison = a.type.localeCompare(b.type);
+      } else if (sortBy === 'duration') {
+        comparison = a.durationMs - b.durationMs;
+      } else {
+        // 'created' or 'imported'
+        comparison = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      }
+      return sortOrder === 'asc' ? comparison : -comparison;
+    });
+
+  // Check if asset is already added to timeline
+  const isAssetAdded = (assetId: string) => {
+    return project?.tracks.some(track => 
+      track.clips.some(clip => clip.assetId === assetId)
+    ) || false;
+  };
+
+  // Multi-selection and Marquee Selection States
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [lastSelectedAssetId, setLastSelectedAssetId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [marqueeBox, setMarqueeBox] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const containerRefMedia = useRef<HTMLDivElement>(null);
+
+  const handleAssetClick = (e: React.MouseEvent, assetId: string) => {
+    const isShift = e.shiftKey;
+    const isCmd = e.metaKey || e.ctrlKey;
+
+    if (isCmd) {
+      setSelectedAssetIds(prev => {
+        if (prev.includes(assetId)) {
+          return prev.filter(id => id !== assetId);
+        } else {
+          return [...prev, assetId];
+        }
+      });
+      setLastSelectedAssetId(assetId);
+    } else if (isShift && lastSelectedAssetId) {
+      const allIds = filteredAssets.map(a => a.id);
+      const lastIdx = allIds.indexOf(lastSelectedAssetId);
+      const currentIdx = allIds.indexOf(assetId);
+      if (lastIdx !== -1 && currentIdx !== -1) {
+        const start = Math.min(lastIdx, currentIdx);
+        const end = Math.max(lastIdx, currentIdx);
+        const rangeIds = allIds.slice(start, end + 1);
+        
+        setSelectedAssetIds(prev => {
+          const union = new Set([...prev, ...rangeIds]);
+          return Array.from(union);
+        });
+      }
+    } else {
+      setSelectedAssetIds([assetId]);
+      setLastSelectedAssetId(assetId);
+    }
+  };
+
+  const handleContainerMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('input') || target.closest('select') || target.closest('a')) {
+      return;
+    }
+
+    const assetCard = target.closest('[data-asset-id]');
+    if (assetCard) {
+      const assetId = assetCard.getAttribute('data-asset-id')!;
+      handleAssetClick(e, assetId);
+      return;
+    }
+
+    // Clicked empty space: clear selection unless modifier keys are held
+    if (!e.metaKey && !e.ctrlKey && !e.shiftKey) {
+      setSelectedAssetIds([]);
+    }
+
+    const container = containerRefMedia.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const startX = e.clientX - rect.left + container.scrollLeft;
+    const startY = e.clientY - rect.top + container.scrollTop;
+
+    setMarqueeBox({
+      x1: startX,
+      y1: startY,
+      x2: startX,
+      y2: startY
+    });
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const currentX = moveEvent.clientX - rect.left + container.scrollLeft;
+      const currentY = moveEvent.clientY - rect.top + container.scrollTop;
+
+      setMarqueeBox({
+        x1: startX,
+        y1: startY,
+        x2: currentX,
+        y2: currentY
+      });
+
+      const xMin = Math.min(startX, currentX);
+      const xMax = Math.max(startX, currentX);
+      const yMin = Math.min(startY, currentY);
+      const yMax = Math.max(startY, currentY);
+
+      const cards = container.querySelectorAll('[data-asset-id]');
+      const intersectedIds: string[] = [];
+
+      cards.forEach(card => {
+        const cardHtml = card as HTMLElement;
+        const cardLeft = cardHtml.offsetLeft;
+        const cardTop = cardHtml.offsetTop;
+        const cardWidth = cardHtml.offsetWidth;
+        const cardHeight = cardHtml.offsetHeight;
+
+        const cardRight = cardLeft + cardWidth;
+        const cardBottom = cardTop + cardHeight;
+
+        const isOverlapping = !(
+          cardLeft > xMax ||
+          cardRight < xMin ||
+          cardTop > yMax ||
+          cardBottom < yMin
+        );
+
+        if (isOverlapping) {
+          const id = card.getAttribute('data-asset-id');
+          if (id) intersectedIds.push(id);
+        }
+      });
+
+      if (moveEvent.shiftKey || moveEvent.metaKey || moveEvent.ctrlKey) {
+        setSelectedAssetIds(prev => {
+          const newSelection = new Set(prev);
+          intersectedIds.forEach(id => newSelection.add(id));
+          return Array.from(newSelection);
+        });
+      } else {
+        setSelectedAssetIds(intersectedIds);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setMarqueeBox(null);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  // Keyboard shortcut listener for Cmd+A / Ctrl+A
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (activeTab !== 'media') return;
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+        return;
+      }
+      const isCmdA = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a';
+      if (isCmdA) {
+        e.preventDefault();
+        setSelectedAssetIds(filteredAssets.map(a => a.id));
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTab, filteredAssets]);
+
+  // Close context menu on click elsewhere
+  useEffect(() => {
+    const closeMenu = () => setContextMenu(null);
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, []);
+
+  // Keep thumbnailCache in a ref to avoid dependency cycle
+  const thumbnailCacheRef = useRef(thumbnailCache);
+  useEffect(() => {
+    thumbnailCacheRef.current = thumbnailCache;
+  }, [thumbnailCache]);
+
   // Extract thumbnails for video and image assets in LeftSidebar
+  const assetIds = assets.map(a => a.id).join(',');
   useEffect(() => {
     assets.forEach(async (asset) => {
-      if (thumbnailCache[asset.id]) return;
+      if (thumbnailCacheRef.current[asset.id]) return;
       if (asset.type.startsWith('audio/')) return;
       try {
         const { getFileFromOPFS } = await import('../../lib/opfs');
@@ -77,7 +291,7 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
         video.src = objectUrl;
         video.muted = true;
         video.playsInline = true;
-        video.preload = 'auto';
+        video.preload = 'metadata';
         video.onloadeddata = () => {
           video.currentTime = Math.min(1, video.duration ? video.duration / 2 : 1);
         };
@@ -98,7 +312,7 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
         console.warn('Failed to extract thumbnail for sidebar:', e);
       }
     });
-  }, [assets]);
+  }, [assetIds]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -311,23 +525,49 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
     }
   };
 
-  const handleApplyEffect = (effectId: string, intensity: number) => {
-    if (!selectedClipId) {
-      alert('Please select a video clip on the timeline first to apply an effect.');
-      return;
+  const handleApplyEffect = async (effectId: string, intensity: number) => {
+    if (!project) return;
+
+    if (selectedClipId) {
+      const clip = project.tracks.flatMap(t => t.clips).find(c => c.id === selectedClipId);
+      if (clip && clip.type !== 'audio') {
+        const existing = clip.videoEffects || [];
+        const alreadyApplied = existing.findIndex(e => e.id === effectId);
+        let newEffects;
+        if (alreadyApplied >= 0) {
+          // Update intensity
+          newEffects = existing.map((e, i) => i === alreadyApplied ? { ...e, intensity } : e);
+        } else {
+          newEffects = [...existing, { id: effectId, intensity }];
+        }
+        updateClip(selectedClipId, { videoEffects: newEffects });
+        return;
+      }
     }
-    const clip = project?.tracks.flatMap(t => t.clips).find(c => c.id === selectedClipId);
-    if (!clip) return;
-    const existing = clip.videoEffects || [];
-    const alreadyApplied = existing.findIndex(e => e.id === effectId);
-    let newEffects;
-    if (alreadyApplied >= 0) {
-      // Update intensity
-      newEffects = existing.map((e, i) => i === alreadyApplied ? { ...e, intensity } : e);
-    } else {
-      newEffects = [...existing, { id: effectId, intensity }];
+
+    // Otherwise, apply it as a separate layer on the Effects Track!
+    let effectTrack = project.tracks.find(t => t.type === 'effect');
+    if (!effectTrack) {
+      await addTrack('effect');
+      effectTrack = useEditorStore.getState().project?.tracks.find(t => t.type === 'effect');
     }
-    updateClip(selectedClipId, { videoEffects: newEffects });
+    if (!effectTrack) return;
+
+    const def = EFFECTS_REGISTRY[effectId];
+    const clipId = `clip-${Math.random().toString(36).substring(2, 9)}`;
+    const newEffectClip = {
+      id: clipId,
+      type: 'effect' as const,
+      name: def?.name || 'Effect',
+      durationMs: 3000, // 3 seconds
+      trimStartMs: 0,
+      trimEndMs: 0,
+      positionMs: currentTime, // at playhead!
+      trackId: effectTrack.id,
+      videoEffects: [{ id: effectId, intensity }]
+    };
+    await addClip(effectTrack.id, newEffectClip);
+    useEditorStore.setState({ selectedClipId: clipId });
   };
 
   const handleRemoveEffect = (effectId: string) => {
@@ -338,17 +578,47 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
     updateClip(selectedClipId, { videoEffects: newEffects });
   };
 
-  const handleApplyFilter = (type: string) => {
-    if (!selectedClipId) {
-      alert('Please select a video clip on the timeline first to apply filter.');
-      return;
+  const handleApplyFilter = async (type: string) => {
+    if (!project) return;
+
+    if (selectedClipId) {
+      const clip = project.tracks.flatMap(t => t.clips).find(c => c.id === selectedClipId);
+      if (clip && clip.type !== 'audio') {
+        updateClip(selectedClipId, {
+          filterSettings: {
+            type,
+            intensity: 80
+          }
+        });
+        return;
+      }
     }
-    updateClip(selectedClipId, {
+
+    // Apply as separate layer on the Effects Track!
+    let effectTrack = project.tracks.find(t => t.type === 'effect');
+    if (!effectTrack) {
+      await addTrack('effect');
+      effectTrack = useEditorStore.getState().project?.tracks.find(t => t.type === 'effect');
+    }
+    if (!effectTrack) return;
+
+    const clipId = `clip-${Math.random().toString(36).substring(2, 9)}`;
+    const newFilterClip = {
+      id: clipId,
+      type: 'effect' as const,
+      name: type.charAt(0).toUpperCase() + type.slice(1),
+      durationMs: 3000,
+      trimStartMs: 0,
+      trimEndMs: 0,
+      positionMs: currentTime,
+      trackId: effectTrack.id,
       filterSettings: {
         type,
         intensity: 80
       }
-    });
+    };
+    await addClip(effectTrack.id, newFilterClip);
+    useEditorStore.setState({ selectedClipId: clipId });
   };
 
   const formatDuration = (ms: number) => {
@@ -357,40 +627,7 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
     return `${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
   };
 
-  // Filter and Sort assets based on criteria
-  const filteredAssets = assets
-    .filter(asset => {
-      // Search query
-      if (searchQuery && !asset.name.toLowerCase().includes(searchQuery.toLowerCase())) {
-        return false;
-      }
-      // Filter Type
-      if (filterType === 'video') return asset.type.startsWith('video/');
-      if (filterType === 'audio') return asset.type.startsWith('audio/');
-      if (filterType === 'image') return asset.type.startsWith('image/');
-      return true;
-    })
-    .sort((a, b) => {
-      let comparison = 0;
-      if (sortBy === 'name') {
-        comparison = a.name.localeCompare(b.name);
-      } else if (sortBy === 'type') {
-        comparison = a.type.localeCompare(b.type);
-      } else if (sortBy === 'duration') {
-        comparison = a.durationMs - b.durationMs;
-      } else {
-        // 'created' or 'imported'
-        comparison = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-      }
-      return sortOrder === 'asc' ? comparison : -comparison;
-    });
 
-  // Check if asset is already added to timeline
-  const isAssetAdded = (assetId: string) => {
-    return project?.tracks.some(track => 
-      track.clips.some(clip => clip.assetId === assetId)
-    ) || false;
-  };
 
   return (
     <div 
@@ -568,10 +805,64 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
                   </button>
                 ))}
               </div>
+
+              {/* Bulk Actions Bar */}
+              {filteredAssets.length > 0 && (
+                <div className="flex items-center justify-between text-[9px] text-zinc-400 px-2 py-1 bg-[#1a1a20]/30 border-b border-[#2c2c32]/50">
+                  <label className="flex items-center gap-1.5 cursor-pointer hover:text-zinc-200 select-none">
+                    <input
+                      type="checkbox"
+                      checked={filteredAssets.length > 0 && selectedAssetIds.length === filteredAssets.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedAssetIds(filteredAssets.map(a => a.id));
+                        } else {
+                          setSelectedAssetIds([]);
+                        }
+                      }}
+                      className="w-2.5 h-2.5 rounded bg-zinc-950 border border-zinc-800 accent-sky-500 cursor-pointer"
+                    />
+                    <span>Select All ({filteredAssets.length})</span>
+                  </label>
+
+                  <button
+                    onClick={async () => {
+                      if (confirm("Are you sure you want to delete ALL media in the current view?")) {
+                        for (const asset of filteredAssets) {
+                          await db.assets.delete(asset.id);
+                        }
+                        setSelectedAssetIds([]);
+                      }
+                    }}
+                    className="text-red-400 hover:text-red-300 font-semibold transition flex items-center gap-0.5 cursor-pointer"
+                  >
+                    <Trash2 className="w-2.5 h-2.5" />
+                    <span>Delete All</span>
+                  </button>
+                </div>
+              )}
             </div>
             
              {/* Media Grid / List */}
-            <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
+            <div 
+              ref={containerRefMedia}
+              onMouseDown={handleContainerMouseDown}
+              onContextMenu={handleContextMenu}
+              className="flex-1 overflow-y-auto p-3 custom-scrollbar relative select-none"
+            >
+              {/* Marquee Visual Box */}
+              {marqueeBox && (
+                <div
+                  className="absolute border border-sky-500 bg-sky-500/15 pointer-events-none z-45"
+                  style={{
+                    left: Math.min(marqueeBox.x1, marqueeBox.x2),
+                    top: Math.min(marqueeBox.y1, marqueeBox.y2),
+                    width: Math.abs(marqueeBox.x1 - marqueeBox.x2),
+                    height: Math.abs(marqueeBox.y1 - marqueeBox.y2)
+                  }}
+                />
+              )}
+
               {filteredAssets.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-48 border border-dashed border-[#2c2c32] rounded-lg text-center p-4">
                   <Film className="w-8 h-8 text-gray-600 mb-2" />
@@ -582,23 +873,31 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
                 </div>
               ) : viewMode === 'grid' ? (
                 /* Grid View */
-                <div className="grid grid-cols-2 gap-x-2 gap-y-3.5">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(90px,1fr))] gap-x-2 gap-y-3.5">
                   {filteredAssets.map(asset => {
                     const isAudio = asset.type.startsWith('audio/');
                     const added = isAssetAdded(asset.id);
+                    const isSelected = selectedAssetIds.includes(asset.id);
                     return (
-                      <div key={asset.id} className="flex flex-col min-w-0">
+                      <div key={asset.id} data-asset-id={asset.id} className="flex flex-col min-w-0">
                         <div
                           draggable
                           onDragStart={(e) => {
+                            const dragIds = selectedAssetIds.includes(asset.id) ? selectedAssetIds : [asset.id];
+                            e.dataTransfer.setData('application/cap-asset-ids', JSON.stringify(dragIds));
                             e.dataTransfer.setData('application/cap-asset-id', asset.id);
                             const assetClipType = asset.type.startsWith('audio/') ? 'audio'
                               : asset.type.startsWith('image/') ? 'image' : 'video';
                             e.dataTransfer.setData('application/cap-asset-type', assetClipType);
                             e.dataTransfer.effectAllowed = 'copy';
                           }}
-                          className="group relative aspect-video bg-[#1e1e22] border border-[#2c2c32] rounded overflow-hidden hover:border-sky-500 transition cursor-grab active:cursor-grabbing flex items-center justify-center"
-                          onClick={() => handleAddToTimeline(asset)}
+                          className={`group relative aspect-video bg-[#1e1e22] border rounded overflow-hidden transition cursor-grab active:cursor-grabbing flex items-center justify-center ${
+                            isSelected 
+                              ? 'border-sky-500 ring-2 ring-sky-500/20 z-10' 
+                              : 'border-[#2c2c32] hover:border-sky-500/60'
+                          }`}
+                          onClick={(e) => handleAssetClick(e, asset.id)}
+                          onDoubleClick={() => handleAddToTimeline(asset)}
                         >
                           {/* Thumbnail */}
                           {isAudio ? (
@@ -623,14 +922,35 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
                             </div>
                           )}
 
+                          {/* Selection Checkbox */}
+                          <div 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedAssetIds(prev => {
+                                if (prev.includes(asset.id)) {
+                                  return prev.filter(id => id !== asset.id);
+                                } else {
+                                  return [...prev, asset.id];
+                                }
+                              });
+                            }}
+                            className={`absolute top-1.5 left-1.5 w-4 h-4 rounded border flex items-center justify-center transition-all z-20 cursor-pointer ${
+                              isSelected 
+                                ? 'bg-sky-500 border-sky-400 text-white' 
+                                : 'bg-black/45 border-gray-500/60 opacity-0 group-hover:opacity-100'
+                            }`}
+                          >
+                            {isSelected && <Check className="w-3 h-3" />}
+                          </div>
+
                           {/* Duration Badge */}
                           <span className="absolute top-1.5 right-1.5 px-1 bg-black/60 text-[8px] font-mono text-white rounded">
                             {formatDuration(asset.durationMs)}
                           </span>
 
                           {/* Added Overlay Indicator */}
-                          {added && (
-                            <span className="absolute top-1.5 left-1.5 px-1 py-0.5 bg-sky-500/90 text-[8px] font-bold text-white rounded">
+                          {added && !isSelected && (
+                            <span className="absolute bottom-1.5 left-1.5 px-1 py-0.5 bg-sky-500/90 text-[8px] font-bold text-white rounded">
                               Added
                             </span>
                           )}
@@ -669,19 +989,50 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
                   {filteredAssets.map(asset => {
                     const isAudio = asset.type.startsWith('audio/');
                     const added = isAssetAdded(asset.id);
+                    const isSelected = selectedAssetIds.includes(asset.id);
                     return (
                       <div 
                         key={asset.id} 
+                        data-asset-id={asset.id}
                         draggable
                         onDragStart={(e) => {
+                          const dragIds = selectedAssetIds.includes(asset.id) ? selectedAssetIds : [asset.id];
+                          e.dataTransfer.setData('application/cap-asset-ids', JSON.stringify(dragIds));
                           e.dataTransfer.setData('application/cap-asset-id', asset.id);
                           const assetClipType = asset.type.startsWith('audio/') ? 'audio'
                             : asset.type.startsWith('image/') ? 'image' : 'video';
                           e.dataTransfer.setData('application/cap-asset-type', assetClipType);
                           e.dataTransfer.effectAllowed = 'copy';
                         }}
-                        className="group flex items-center gap-2.5 p-1.5 bg-[#1a1a20]/40 border border-[#2c2c32] hover:border-sky-500/80 rounded transition cursor-grab active:cursor-grabbing text-left min-w-0"
+                        className={`group flex items-center gap-2.5 p-1.5 bg-[#1a1a20]/40 border rounded transition cursor-grab active:cursor-grabbing text-left min-w-0 ${
+                          isSelected 
+                            ? 'border-sky-500 ring-2 ring-sky-500/20 z-10' 
+                            : 'border-[#2c2c32] hover:border-sky-500/60'
+                        }`}
+                        onClick={(e) => handleAssetClick(e, asset.id)}
+                        onDoubleClick={() => handleAddToTimeline(asset)}
                       >
+                        {/* Selection Checkbox (List view) */}
+                        <div 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedAssetIds(prev => {
+                              if (prev.includes(asset.id)) {
+                                return prev.filter(id => id !== asset.id);
+                              } else {
+                                return [...prev, asset.id];
+                              }
+                            });
+                          }}
+                          className={`w-4 h-4 rounded border flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                            isSelected 
+                              ? 'bg-sky-500 border-sky-400 text-white' 
+                              : 'bg-black/30 border-gray-500/60 opacity-0 group-hover:opacity-100'
+                          }`}
+                        >
+                          {isSelected && <Check className="w-3 h-3" />}
+                        </div>
+
                         {/* Small Thumbnail */}
                         <div className="w-12 h-8 bg-[#121214] border border-[#2c2c32] rounded overflow-hidden flex items-center justify-center shrink-0">
                           {isAudio ? (
@@ -742,6 +1093,107 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {/* Floating Selection Action Bar */}
+              {selectedAssetIds.length > 0 && (
+                <div className="absolute bottom-2 left-2 right-2 p-2 bg-[#18181c] border border-[#2c2c32] rounded-lg shadow-2xl flex items-center justify-between z-50">
+                  <span className="text-[10px] text-sky-450 font-bold pl-1 font-sans">
+                    {selectedAssetIds.length} Selected
+                  </span>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={async () => {
+                        for (const id of selectedAssetIds) {
+                          const asset = filteredAssets.find(a => a.id === id);
+                          if (asset) await handleAddToTimeline(asset);
+                        }
+                        setSelectedAssetIds([]);
+                      }}
+                      className="px-2 py-1 bg-sky-600 hover:bg-sky-500 text-white text-[9px] font-bold rounded transition flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" /> Add
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (confirm(`Delete ${selectedAssetIds.length} selected assets?`)) {
+                          for (const id of selectedAssetIds) {
+                            const asset = filteredAssets.find(a => a.id === id);
+                            if (asset) await db.assets.delete(asset.id);
+                          }
+                          setSelectedAssetIds([]);
+                        }
+                      }}
+                      className="px-2 py-1 bg-red-955/50 hover:bg-red-600 text-red-200 hover:text-white text-[9px] font-bold rounded transition cursor-pointer"
+                    >
+                      Delete
+                    </button>
+                    <button
+                      onClick={() => setSelectedAssetIds([])}
+                      className="px-2 py-1 bg-[#232327] hover:bg-[#2e2e33] text-zinc-300 text-[9px] font-bold rounded transition cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Context Menu */}
+              {contextMenu && (
+                <div
+                  style={{ top: contextMenu.y, left: contextMenu.x }}
+                  className="fixed z-[100] bg-[#1a1a1e]/95 border border-[#2c2c32] rounded shadow-2xl py-1 w-48 text-left backdrop-blur"
+                >
+                  <button
+                    onClick={() => {
+                      setSelectedAssetIds(filteredAssets.map(a => a.id));
+                      setContextMenu(null);
+                    }}
+                    className="w-full text-left px-3 py-1.5 text-[10px] text-gray-250 hover:bg-[#2a2a30] hover:text-sky-400 transition cursor-pointer"
+                  >
+                    Select All (Cmd+A)
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSelectedAssetIds([]);
+                      setContextMenu(null);
+                    }}
+                    className="w-full text-left px-3 py-1.5 text-[10px] text-gray-250 hover:bg-[#2a2a30] hover:text-sky-400 transition cursor-pointer"
+                  >
+                    Deselect All
+                  </button>
+                  <div className="h-[1px] bg-[#2c2c32] my-1" />
+                  <button
+                    onClick={async () => {
+                      for (const id of selectedAssetIds) {
+                        const asset = filteredAssets.find(a => a.id === id);
+                        if (asset) await handleAddToTimeline(asset);
+                      }
+                      setSelectedAssetIds([]);
+                      setContextMenu(null);
+                    }}
+                    disabled={selectedAssetIds.length === 0}
+                    className="w-full text-left px-3 py-1.5 text-[10px] text-gray-250 hover:bg-[#2a2a30] hover:text-sky-400 transition disabled:opacity-45 cursor-pointer"
+                  >
+                    Add Selected to Timeline
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (confirm(`Delete ${selectedAssetIds.length} selected assets?`)) {
+                        for (const id of selectedAssetIds) {
+                          const asset = filteredAssets.find(a => a.id === id);
+                          if (asset) await db.assets.delete(asset.id);
+                        }
+                        setSelectedAssetIds([]);
+                      }
+                      setContextMenu(null);
+                    }}
+                    disabled={selectedAssetIds.length === 0}
+                    className="w-full text-left px-3 py-1.5 text-[10px] text-red-400 hover:bg-red-950/40 hover:text-red-300 transition disabled:opacity-45 cursor-pointer"
+                  >
+                    Delete Selected
+                  </button>
                 </div>
               )}
             </div>
@@ -866,13 +1318,96 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
                   <option value="fr-FR">French (France)</option>
                 </select>
               </div>
-              <button
-                onClick={() => alert('Voice captioning is simulated. Captions will be auto-generated at the playhead position.')}
-                className="w-full py-2 bg-sky-650 hover:bg-sky-500 text-white font-semibold rounded-lg text-xs transition shadow-lg shadow-sky-600/10 flex items-center justify-center gap-1.5"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-sky-250" />
-                Generate Captions
-              </button>
+
+              {isGeneratingCaptions ? (
+                <div className="space-y-2 text-center p-4 bg-[#121214] rounded-lg border border-[#2c2c32] animate-pulse">
+                  <div className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 text-sky-400 animate-spin" />
+                    <span className="text-xs text-zinc-300">Generating audio transcript...</span>
+                  </div>
+                  <div className="w-full bg-[#1e1e22] h-1.5 rounded-full overflow-hidden">
+                    <div className="h-full bg-sky-500 transition-all duration-300" style={{ width: `${captionsProgress}%` }} />
+                  </div>
+                  <span className="text-[10px] font-mono text-zinc-500">{captionsProgress}% complete</span>
+                </div>
+              ) : (
+                <button
+                  onClick={async () => {
+                    if (!project) return;
+                    setIsGeneratingCaptions(true);
+                    setCaptionsProgress(0);
+
+                    // Mock loader ticks
+                    const interval = setInterval(() => {
+                      setCaptionsProgress(p => {
+                        if (p >= 90) {
+                          clearInterval(interval);
+                          return 90;
+                        }
+                        return p + Math.floor(Math.random() * 15 + 5);
+                      });
+                    }, 200);
+
+                    try {
+                      const { generateAutoCaptions } = await import('../../lib/captions-generator');
+                      const segments = await generateAutoCaptions(project);
+
+                      let textTrack = project.tracks.find(t => t.type === 'text');
+                      if (!textTrack) {
+                        await addTrack('text');
+                        // Reload from state
+                        const updatedProj = useEditorStore.getState().project;
+                        textTrack = updatedProj?.tracks.find(t => t.type === 'text');
+                      }
+
+                      if (!textTrack) {
+                        alert('Could not add a text track for subtitles.');
+                        clearInterval(interval);
+                        setIsGeneratingCaptions(false);
+                        return;
+                      }
+
+                      for (const seg of segments) {
+                        const clipId = Math.random().toString(36).substring(2, 9);
+                        await addClip(textTrack.id, {
+                          id: clipId,
+                          type: 'text',
+                          name: seg.text,
+                          durationMs: seg.endMs - seg.startMs,
+                          trimStartMs: 0,
+                          trimEndMs: seg.endMs - seg.startMs,
+                          positionMs: seg.startMs,
+                          textSettings: {
+                            content: seg.text,
+                            color: '#ffffff',
+                            fontSize: 22,
+                            fontFamily: 'Inter',
+                            x: 0.5,
+                            y: 0.8,
+                            scale: 1
+                          }
+                        });
+                      }
+
+                      setCaptionsProgress(100);
+                      setTimeout(() => {
+                        setIsGeneratingCaptions(false);
+                        alert(`Successfully generated ${segments.length} subtitles directly on the Text Track!`);
+                      }, 500);
+                    } catch (err) {
+                      console.error(err);
+                      alert('Failed to generate captions.');
+                      setIsGeneratingCaptions(false);
+                    } finally {
+                      clearInterval(interval);
+                    }
+                  }}
+                  className="w-full py-2 bg-sky-650 hover:bg-sky-500 text-white font-semibold rounded-lg text-xs transition shadow-lg shadow-sky-600/10 flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-sky-250" />
+                  Generate Captions
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -884,25 +1419,51 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
               <h3 className="font-bold text-xs uppercase tracking-wider text-gray-400">Filters</h3>
             </div>
             <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(80px,1fr))] gap-2">
                 {[
-                  { id: 'none', name: 'None (Default)' },
-                  { id: 'cinematic', name: 'Cinematic Blue' },
+                  { id: 'none', name: 'None' },
+                  { id: 'cinematic', name: 'Cinematic' },
                   { id: 'bw', name: 'Noir B&W' },
-                  { id: 'vintage', name: 'Vintage Retro' },
-                  { id: 'warm', name: 'Golden Warm' },
+                  { id: 'vintage', name: 'Vintage' },
+                  { id: 'warm', name: 'Golden' },
                   { id: 'cool', name: 'Teal Cool' },
-                  { id: 'cyberpunk', name: 'Neon Cyberpunk' },
-                  { id: 'sepia', name: 'Rustic Sepia' }
-                ].map(filter => (
-                  <button
-                    key={filter.id}
-                    onClick={() => handleApplyFilter(filter.id)}
-                    className="p-3 bg-[#121214] hover:border-sky-500 border border-[#2c2c32] rounded transition text-left text-xs"
-                  >
-                    <p className="font-semibold text-gray-200 truncate">{filter.name}</p>
-                  </button>
-                ))}
+                  { id: 'cyberpunk', name: 'Cyberpunk' },
+                  { id: 'sepia', name: 'Sepia' },
+                  { id: 'pastel', name: 'Dreamy Pastel' },
+                  { id: 'forest', name: 'Forest Green' },
+                  { id: 'polaroid', name: 'Polaroid Film' },
+                  { id: 'vaporwave', name: 'Vaporwave' }
+                ].map(filter => {
+                  const isApplied = activeFilter === filter.id;
+                  return (
+                    <div
+                      key={filter.id}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('application/cap-filter-id', filter.id);
+                        e.dataTransfer.effectAllowed = 'copy';
+                      }}
+                      onClick={() => handleApplyFilter(filter.id)}
+                      className={`relative rounded-lg overflow-hidden cursor-pointer border text-left transition-all duration-200 ${isApplied ? 'border-sky-500 shadow-lg shadow-sky-500/20' : 'border-[#2c2c32] hover:border-sky-400/60'}`}
+                    >
+                      {/* Preview Thumbnail */}
+                      <div className="h-14 w-full relative overflow-hidden bg-zinc-950 flex items-center justify-center">
+                        <div className="w-full h-full" style={getFilterPreviewStyle(filter.id)}>
+                          <img src={heroImg} className="w-full h-full object-cover" alt={filter.name} />
+                        </div>
+                        {isApplied && (
+                          <div className="absolute top-1 right-1 w-4 h-4 bg-sky-500 rounded-full flex items-center justify-center shadow z-10">
+                            <Check className="w-2.5 h-2.5 text-white" />
+                          </div>
+                        )}
+                      </div>
+                      {/* Label */}
+                      <div className="px-1.5 py-1 bg-[#121214]">
+                        <p className="text-[10px] font-semibold text-gray-200 truncate">{filter.name}</p>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -958,7 +1519,7 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
           <div className="flex-1 flex flex-col overflow-hidden">
             <div className="p-3 border-b border-[#2c2c32]">
               <h3 className="font-bold text-xs uppercase tracking-wider text-gray-400">AI Avatars</h3>
-              <p className="text-[10px] text-gray-500 mt-0.5">Add simulated AI speaker avatars to your video.</p>
+              <p className="text-[10px] text-gray-500 mt-0.5">Add talking AI speaker avatars to your video.</p>
             </div>
             <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
               <div className="grid grid-cols-2 gap-2">
@@ -970,7 +1531,26 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
                 ].map((avatar, i) => (
                   <div
                     key={i}
-                    onClick={() => alert(`Adding AI Avatar ${avatar.name} (simulated)`)}
+                    onClick={() => {
+                      if (!project) return;
+                      const videoTrack = project.tracks.find(t => t.type === 'video');
+                      if (!videoTrack) {
+                        alert('No Video track found to add the avatar clip.');
+                        return;
+                      }
+                      const preset = avatar.name.split(' ')[0].toLowerCase();
+                      const clipId = Math.random().toString(36).substring(2, 9);
+                      addClip(videoTrack.id, {
+                        id: clipId,
+                        assetId: `avatar_${preset}`,
+                        type: 'video',
+                        name: `AI Avatar (${avatar.name})`,
+                        durationMs: 5000,
+                        trimStartMs: 0,
+                        trimEndMs: 5000,
+                        positionMs: currentTime
+                      });
+                    }}
                     className="flex flex-col items-center justify-center p-4 bg-[#121214] border border-[#2c2c32] hover:border-sky-500 rounded text-center transition cursor-pointer"
                   >
                     <div className="w-12 h-12 rounded-full bg-[#1e1e22] flex items-center justify-center text-sky-400 border border-[#2c2c32] mb-2">
@@ -991,6 +1571,80 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
 }
 
 /* ─────────────────────────── Effects Panel ─────────────────────────── */
+const EffectPreviewPlaceholder = () => (
+  <div className="w-full h-full relative overflow-hidden">
+    <img src={heroImg} className="w-full h-full object-cover" alt="Outgoing Clip" />
+  </div>
+);
+
+const getEffectPreviewStyle = (effectId: string) => {
+  switch (effectId) {
+    case 'blur-gaussian':
+      return { filter: 'blur(1.5px)' };
+    case 'blur-tilt-shift':
+      return { filter: 'blur(1.2px) contrast(105%)' };
+    case 'glow-neon':
+      return { filter: 'brightness(110%) saturate(140%) drop-shadow(0 0 3px #8b5cf6)' };
+    case 'glow-bloom':
+      return { filter: 'brightness(125%) blur(0.5px)' };
+    case 'glow-dreamy':
+      return { filter: 'brightness(105%) saturate(75%) sepia(20%) blur(0.3px)' };
+    case 'distort-fisheye':
+      return { transform: 'scale(1.12)', filter: 'contrast(110%)' };
+    case 'distort-wave':
+      return { transform: 'skewX(3deg) scale(1.05)' };
+    case 'distort-glitch':
+      return { filter: 'hue-rotate(90deg) saturate(140%) contrast(115%)' };
+    case 'camera-shake':
+      return { animation: 'preview-shake 0.5s infinite alternate' };
+    case 'camera-grain':
+      return { filter: 'contrast(115%) brightness(95%) saturate(90%)' };
+    case 'camera-scanlines':
+      return { filter: 'brightness(90%) contrast(110%)' };
+    case 'color-vignette':
+      return {};
+    case 'color-lomo':
+      return { filter: 'contrast(130%) saturate(125%) brightness(90%)' };
+    case 'distort-mirror':
+      return {};
+    case 'color-thermal':
+      return { filter: 'hue-rotate(240deg) saturate(220%) contrast(140%) brightness(110%)' };
+    case 'distort-pixelate':
+      return { filter: 'contrast(120%) saturate(110%) brightness(95%)', imageRendering: 'pixelated' as any };
+    default:
+      return {};
+  }
+};
+
+const getFilterPreviewStyle = (filterId: string) => {
+  switch (filterId) {
+    case 'bw':
+      return { filter: 'grayscale(100%)' };
+    case 'sepia':
+      return { filter: 'sepia(100%)' };
+    case 'vintage':
+      return { filter: 'sepia(40%) hue-rotate(30deg) contrast(80%)' };
+    case 'warm':
+      return { filter: 'sepia(30%) saturate(120%)' };
+    case 'cool':
+      return { filter: 'hue-rotate(190deg) saturate(110%)' };
+    case 'cyberpunk':
+      return { filter: 'hue-rotate(300deg) contrast(1.1) saturate(150%)' };
+    case 'cinematic':
+      return { filter: 'contrast(120%) saturate(90%)' };
+    case 'pastel':
+      return { filter: 'sepia(25%) saturate(130%) hue-rotate(-15deg) contrast(95%)' };
+    case 'forest':
+      return { filter: 'hue-rotate(60deg) saturate(110%) contrast(115%)' };
+    case 'polaroid':
+      return { filter: 'contrast(85%) saturate(85%) sepia(15%) brightness(105%)' };
+    case 'vaporwave':
+      return { filter: 'hue-rotate(270deg) saturate(160%) contrast(110%)' };
+    default:
+      return {};
+  }
+};
+
 interface EffectsPanelProps {
   selectedClipId: string | null;
   project: any;
@@ -1099,7 +1753,16 @@ function EffectsPanel({ selectedClipId, project, handleApplyEffect, handleRemove
 
       {/* Effect cards grid */}
       <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
-        <div className="grid grid-cols-2 gap-2">
+        <style>{`
+          @keyframes preview-shake {
+            0% { transform: translate(0, 0) rotate(0deg); }
+            25% { transform: translate(1px, 1px) rotate(0.5deg); }
+            50% { transform: translate(-1px, -1px) rotate(-0.5deg); }
+            75% { transform: translate(1px, -1px) rotate(0.5deg); }
+            100% { transform: translate(0, 0) rotate(0deg); }
+          }
+        `}</style>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(80px,1fr))] gap-2">
           {filtered.map(effect => {
             const isApplied = appliedIds.has(effect.id);
             const isHovered = hoveredId === effect.id;
@@ -1116,22 +1779,59 @@ function EffectsPanel({ selectedClipId, project, handleApplyEffect, handleRemove
                 onMouseLeave={() => setHoveredId(null)}
                 onClick={() => handleApplyEffect(effect.id, EFFECTS_REGISTRY[effect.id]?.defaultIntensity || 60)}
               >
-                {/* Preview gradient */}
-                <div
-                  className="h-14 w-full relative overflow-hidden"
-                  style={{ background: `linear-gradient(135deg, ${effect.previewColors[0]}, ${effect.previewColors[1]})` }}
-                >
+                {/* Preview Thumbnail Container */}
+                <div className="h-14 w-full relative overflow-hidden bg-zinc-950 flex items-center justify-center">
+                  {effect.id === 'distort-mirror' ? (
+                    <div className="w-full h-full flex pointer-events-none">
+                      <div className="w-1/2 h-full overflow-hidden">
+                        <EffectPreviewPlaceholder />
+                      </div>
+                      <div className="w-1/2 h-full overflow-hidden scale-x-[-1]">
+                        <EffectPreviewPlaceholder />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-full h-full transition-all duration-300" style={getEffectPreviewStyle(effect.id)}>
+                      <EffectPreviewPlaceholder />
+                    </div>
+                  )}
+
+                  {/* Vignette Overlay */}
+                  {effect.id === 'color-vignette' && (
+                    <div className="absolute inset-0 pointer-events-none" style={{
+                      background: 'radial-gradient(circle, transparent 35%, rgba(0,0,0,0.85) 100%)'
+                    }} />
+                  )}
+
+                  {/* CRT Scanlines Overlay */}
+                  {effect.id === 'camera-scanlines' && (
+                    <div className="absolute inset-0 pointer-events-none" style={{
+                      background: 'linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.3) 50%)',
+                      backgroundSize: '100% 3px'
+                    }} />
+                  )}
+
+                  {/* Film Grain Overlay */}
+                  {effect.id === 'camera-grain' && (
+                    <div className="absolute inset-0 pointer-events-none opacity-25 bg-[radial-gradient(#fff_1px,transparent_1px)] bg-[size:3px_3px]" />
+                  )}
+
+                  {/* Pixelate Overlay */}
+                  {effect.id === 'distort-pixelate' && (
+                    <div className="absolute inset-0 pointer-events-none opacity-20 bg-[linear-gradient(rgba(0,0,0,0.4)_1px,transparent_1px),linear-gradient(90deg,rgba(0,0,0,0.4)_1px,transparent_1px)] bg-[size:4px_4px]" />
+                  )}
+
                   {isHovered && (
-                    <div className="absolute inset-0 animate-pulse opacity-40"
+                    <div className="absolute inset-0 animate-pulse opacity-20"
                       style={{ background: `radial-gradient(circle at 50% 50%, ${effect.previewColors[0]}88, transparent 70%)` }}
                     />
                   )}
                   {isApplied && (
-                    <div className="absolute top-1 right-1 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center shadow">
+                    <div className="absolute top-1 right-1 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center shadow z-10">
                       <Check className="w-2.5 h-2.5 text-white" />
                     </div>
                   )}
-                  <div className="absolute bottom-1 left-1.5">
+                  <div className="absolute bottom-1 left-1.5 z-10">
                     <span className="text-[8px] font-bold text-white/60 uppercase tracking-wider">{effect.category}</span>
                   </div>
                 </div>
@@ -1156,6 +1856,58 @@ function EffectsPanel({ selectedClipId, project, handleApplyEffect, handleRemove
 }
 
 /* ──────────────────────── Transitions Panel ─────────────────────────── */
+const TransitionPreviewPlaceholderB = () => (
+  <div className="w-full h-full relative overflow-hidden">
+    <img src={heroImg} className="w-full h-full object-cover filter hue-rotate-[120deg] brightness-[85%]" alt="Incoming Clip" />
+  </div>
+);
+
+const getTransitionAnimationA = (id: string, isHovered: boolean) => {
+  if (!isHovered) return {};
+  if (id === 'cross-zoom') {
+    return { animation: 'trans-cross-zoom-a 1.5s infinite ease-in-out' };
+  }
+  return {};
+};
+
+const getTransitionAnimationB = (id: string, isHovered: boolean) => {
+  if (!isHovered) return { opacity: 0 };
+  switch (id) {
+    case 'fade':
+      return { animation: 'trans-fade 1.5s infinite ease-in-out' };
+    case 'dip-black':
+    case 'dip-white':
+    case 'flash':
+      return { animation: 'trans-clip-reveal 1.5s infinite' };
+    case 'wipe-left':
+      return { animation: 'trans-wipe-left 1.5s infinite ease-in-out' };
+    case 'wipe-right':
+      return { animation: 'trans-wipe-right 1.5s infinite ease-in-out' };
+    case 'wipe-up':
+      return { animation: 'trans-wipe-up 1.5s infinite ease-in-out' };
+    case 'wipe-down':
+      return { animation: 'trans-wipe-down 1.5s infinite ease-in-out' };
+    case 'slide-left':
+      return { animation: 'trans-slide-left 1.5s infinite ease-in-out' };
+    case 'slide-right':
+      return { animation: 'trans-slide-right 1.5s infinite ease-in-out' };
+    case 'slide-up':
+      return { animation: 'trans-slide-up 1.5s infinite ease-in-out' };
+    case 'slide-down':
+      return { animation: 'trans-slide-down 1.5s infinite ease-in-out' };
+    case 'zoom':
+      return { animation: 'trans-zoom 1.5s infinite ease-in-out' };
+    case 'zoom-out':
+      return { animation: 'trans-zoom-out 1.5s infinite ease-in-out' };
+    case 'cross-zoom':
+      return { animation: 'trans-cross-zoom-b 1.5s infinite ease-in-out' };
+    case 'glitch':
+      return { animation: 'trans-glitch-b 1.5s infinite steps(5)' };
+    default:
+      return { animation: 'trans-fade 1.5s infinite ease-in-out' };
+  }
+};
+
 interface TransitionsPanelProps {
   selectedClipId: string | null;
   project: any;
@@ -1257,7 +2009,83 @@ function TransitionsPanel({ selectedClipId, project, handleApplyTransition, upda
 
       {/* Transition cards grid */}
       <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
-        <div className="grid grid-cols-2 gap-2">
+        <style>{`
+          @keyframes trans-fade {
+            0%, 10% { opacity: 0; }
+            90%, 100% { opacity: 1; }
+          }
+          @keyframes trans-dip-black {
+            0%, 10% { opacity: 0; }
+            45%, 55% { opacity: 1; }
+            90%, 100% { opacity: 0; }
+          }
+          @keyframes trans-clip-reveal {
+            0%, 10% { opacity: 0; }
+            45% { opacity: 0; }
+            50%, 100% { opacity: 1; }
+          }
+          @keyframes trans-wipe-left {
+            0%, 10% { clip-path: inset(0 100% 0 0); }
+            90%, 100% { clip-path: inset(0 0 0 0); }
+          }
+          @keyframes trans-wipe-right {
+            0%, 10% { clip-path: inset(0 0 0 100%); }
+            90%, 100% { clip-path: inset(0 0 0 0); }
+          }
+          @keyframes trans-wipe-up {
+            0%, 10% { clip-path: inset(100% 0 0 0); }
+            90%, 100% { clip-path: inset(0 0 0 0); }
+          }
+          @keyframes trans-wipe-down {
+            0%, 10% { clip-path: inset(0 0 100% 0); }
+            90%, 100% { clip-path: inset(0 0 0 0); }
+          }
+          @keyframes trans-slide-left {
+            0%, 10% { transform: translateX(100%); }
+            90%, 100% { transform: translateX(0); }
+          }
+          @keyframes trans-slide-right {
+            0%, 10% { transform: translateX(-100%); }
+            90%, 100% { transform: translateX(0); }
+          }
+          @keyframes trans-slide-up {
+            0%, 10% { transform: translateY(100%); }
+            90%, 100% { transform: translateY(0); }
+          }
+          @keyframes trans-slide-down {
+            0%, 10% { transform: translateY(-100%); }
+            90%, 100% { transform: translateY(0); }
+          }
+          @keyframes trans-zoom {
+            0%, 10% { transform: scale(0.3); opacity: 0; }
+            90%, 100% { transform: scale(1); opacity: 1; }
+          }
+          @keyframes trans-zoom-out {
+            0%, 10% { transform: scale(1.5); opacity: 0; }
+            90%, 100% { transform: scale(1); opacity: 1; }
+          }
+          @keyframes trans-cross-zoom-a {
+            0%, 10% { transform: scale(1); opacity: 1; }
+            90%, 100% { transform: scale(1.5); opacity: 0; }
+          }
+          @keyframes trans-cross-zoom-b {
+            0%, 10% { transform: scale(0.5); opacity: 0; }
+            90%, 100% { transform: scale(1); opacity: 1; }
+          }
+          @keyframes trans-glitch-b {
+            0%, 10% { opacity: 0; transform: translate(0, 0); filter: hue-rotate(0deg); }
+            20% { opacity: 0.3; transform: translate(-2px, 1px); filter: hue-rotate(90deg); }
+            40% { opacity: 0.6; transform: translate(2px, -1px); filter: hue-rotate(180deg); }
+            60% { opacity: 0.8; transform: translate(-1px, -1px); }
+            80%, 100% { opacity: 1; transform: translate(0, 0); filter: hue-rotate(0deg); }
+          }
+          @keyframes trans-flash-overlay {
+            0%, 10% { opacity: 0; }
+            30%, 50% { opacity: 1; }
+            90%, 100% { opacity: 0; }
+          }
+        `}</style>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(80px,1fr))] gap-2">
           {filtered.map(trans => {
             const isApplied = activeTransType === trans.id;
             const isHovered = hoveredId === trans.id;
@@ -1274,38 +2102,45 @@ function TransitionsPanel({ selectedClipId, project, handleApplyTransition, upda
                 onMouseLeave={() => setHoveredId(null)}
                 onClick={() => handleApplyWithDuration(trans.id)}
               >
-                {/* Preview gradient with animated shimmer on hover */}
-                <div
-                  className="h-14 w-full relative overflow-hidden"
-                  style={{ background: `linear-gradient(135deg, ${trans.previewColors[0]}, ${trans.previewColors[1]})` }}
-                >
-                  {isHovered && (
-                    <>
-                      <div
-                        className="absolute inset-0 transition-all duration-300"
-                        style={{
-                          background: `linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)`,
-                          transform: isHovered ? 'translateX(100%)' : 'translateX(-100%)',
-                          animation: isHovered ? 'shimmer 0.8s ease-in-out' : 'none',
-                        }}
-                      />
-                      {/* Animated diagonal slice to simulate transition */}
-                      <div
-                        className="absolute inset-0"
-                        style={{
-                          background: `linear-gradient(135deg, ${trans.previewColors[1]} 0%, ${trans.previewColors[1]} 40%, transparent 40%)`,
-                          opacity: 0.6,
-                          animation: 'wipe-preview 1.2s ease-in-out infinite',
-                        }}
-                      />
-                    </>
+                {/* Preview Thumbnail Container */}
+                <div className="h-14 w-full relative overflow-hidden bg-zinc-950 flex items-center justify-center">
+                  {/* Outgoing Clip (Image A) */}
+                  <div className="absolute inset-0 w-full h-full" style={getTransitionAnimationA(trans.id, isHovered)}>
+                    <EffectPreviewPlaceholder />
+                  </div>
+
+                  {/* Incoming Clip (Image B) */}
+                  <div className="absolute inset-0 w-full h-full" style={getTransitionAnimationB(trans.id, isHovered)}>
+                    <TransitionPreviewPlaceholderB />
+                  </div>
+
+                  {/* Dip to Black Overlay */}
+                  {isHovered && trans.id === 'dip-black' && (
+                    <div className="absolute inset-0 bg-black pointer-events-none" style={{
+                      animation: 'trans-dip-black 1.5s infinite ease-in-out'
+                    }} />
                   )}
+
+                  {/* Dip to White Overlay */}
+                  {isHovered && trans.id === 'dip-white' && (
+                    <div className="absolute inset-0 bg-white pointer-events-none" style={{
+                      animation: 'trans-dip-black 1.5s infinite ease-in-out'
+                    }} />
+                  )}
+
+                  {/* Flash Overlay */}
+                  {isHovered && trans.id === 'flash' && (
+                    <div className="absolute inset-0 bg-white pointer-events-none" style={{
+                      animation: 'trans-flash-overlay 1.5s infinite ease-out'
+                    }} />
+                  )}
+
                   {isApplied && (
-                    <div className="absolute top-1 right-1 w-4 h-4 bg-sky-500 rounded-full flex items-center justify-center shadow">
+                    <div className="absolute top-1 right-1 w-4 h-4 bg-sky-500 rounded-full flex items-center justify-center shadow z-10">
                       <Check className="w-2.5 h-2.5 text-white" />
                     </div>
                   )}
-                  <div className="absolute bottom-1 left-1.5">
+                  <div className="absolute bottom-1 left-1.5 z-10">
                     <span className="text-[8px] font-bold text-white/60 uppercase tracking-wider">{trans.category}</span>
                   </div>
                 </div>
