@@ -7,6 +7,7 @@ import { parseCubeLUT, applyLut3D, type Lut3D } from './lut-solver';
 import { initUpscaler, upscaleFrame, isUpscalerReady } from './upscaler';
 import { applyTransitionTransform, drawTransitionOverlay, applyWipeClip } from './transitions-registry';
 import { buildEffectFilterString, applyCanvasEffect } from './effects-registry';
+import { createFile, DataStream, Endianness } from 'mp4box';
 
 export interface ExportSettings {
   width: number;
@@ -17,6 +18,221 @@ export interface ExportSettings {
   onUpscaleProgress?: (stage: string, percent: number) => void;
 }
 
+// ─── Video Demuxer & Decoder Helper for Hardware-Accelerated Export ─────────
+interface DemuxedVideo {
+  codec: string;
+  width: number;
+  height: number;
+  description?: Uint8Array;
+  samples: any[];
+}
+
+function demuxMP4(arrayBuffer: ArrayBuffer): Promise<DemuxedVideo> {
+  return new Promise((resolve, reject) => {
+    const mp4file = createFile();
+    let videoTrack: any = null;
+    const videoSamples: any[] = [];
+
+    mp4file.onError = (e) => {
+      reject(new Error(`mp4box demuxing error: ${e}`));
+    };
+
+    mp4file.onReady = (info) => {
+      videoTrack = info.tracks.find((t: any) => t.video);
+      if (!videoTrack) {
+        reject(new Error('No video track found in source MP4 file.'));
+        return;
+      }
+      mp4file.setExtractionOptions(videoTrack.id, null, { nbSamples: videoTrack.nb_samples });
+      mp4file.start();
+    };
+
+    mp4file.onSamples = (trackId, _ref, samples) => {
+      if (trackId === videoTrack.id) {
+        videoSamples.push(...samples);
+      }
+    };
+
+    try {
+      const buf = arrayBuffer as any;
+      buf.fileStart = 0;
+      mp4file.appendBuffer(buf);
+      mp4file.flush();
+    } catch (err) {
+      reject(err);
+      return;
+    }
+
+    setTimeout(() => {
+      if (videoTrack && videoSamples.length > 0) {
+        let description: Uint8Array | undefined;
+        try {
+          const track = mp4file.getTrackById(videoTrack.id);
+          const entry = track.mdia.minf.stbl.stsd.entries[0] as any;
+          const box =
+            entry.avcC ||
+            entry.hvcC ||
+            entry.vpcC ||
+            entry.av1C ||
+            (entry.boxes &&
+              entry.boxes.find(
+                (b: any) =>
+                  b.type === 'avcC' ||
+                  b.type === 'hvcC' ||
+                  b.type === 'vpcC' ||
+                  b.type === 'av1C'
+              ));
+
+          if (box) {
+            const stream = new DataStream(undefined, 0, Endianness.BIG_ENDIAN);
+            box.write(stream);
+            description = new Uint8Array(stream.buffer, 8);
+          }
+        } catch (err) {
+          console.warn('[Exporter Decoder] Failed to extract codec description:', err);
+        }
+
+        resolve({
+          codec: videoTrack.codec,
+          width: videoTrack.video_width,
+          height: videoTrack.video_height,
+          description,
+          samples: videoSamples
+        });
+      } else {
+        reject(new Error('No video samples extracted.'));
+      }
+    }, 50);
+  });
+}
+
+class VideoDecoderReader {
+  private demuxed: DemuxedVideo | null = null;
+  private decoder: VideoDecoder | null = null;
+  private frameQueue: VideoFrame[] = [];
+  private nextSampleIndex = 0;
+  private arrayBuffer: ArrayBuffer;
+  private isInitialized = false;
+  private decodeError: Error | null = null;
+  private frameResolver: (() => void) | null = null;
+
+  constructor(arrayBuffer: ArrayBuffer) {
+    this.arrayBuffer = arrayBuffer;
+  }
+
+  async init(startTimeSec = 0) {
+    if (this.isInitialized) return;
+    this.demuxed = await demuxMP4(this.arrayBuffer);
+
+    this.decoder = new VideoDecoder({
+      output: (frame) => {
+        this.frameQueue.push(frame);
+        if (this.frameResolver) {
+          const res = this.frameResolver;
+          this.frameResolver = null;
+          res();
+        }
+      },
+      error: (e) => {
+        console.error('[VideoDecoderReader] Decoder error:', e);
+        this.decodeError = e;
+      }
+    });
+
+    this.decoder.configure({
+      codec: this.demuxed.codec,
+      codedWidth: this.demuxed.width,
+      codedHeight: this.demuxed.height,
+      description: this.demuxed.description
+    });
+
+    // Seek to the nearest keyframe preceding the target start time
+    const targetUs = startTimeSec * 1_000_000;
+    let syncIndex = 0;
+
+    for (let i = 0; i < this.demuxed.samples.length; i++) {
+      const sample = this.demuxed.samples[i];
+      const sampleUs = (sample.cts * 1_000_000) / sample.timescale;
+      if (sample.is_sync) {
+        if (sampleUs <= targetUs) {
+          syncIndex = i;
+        } else {
+          break;
+        }
+      }
+    }
+
+    this.nextSampleIndex = syncIndex;
+    this.isInitialized = true;
+  }
+
+  async getFrameAt(timeSec: number): Promise<VideoFrame | null> {
+    if (!this.isInitialized) await this.init(timeSec);
+    if (!this.demuxed || !this.decoder) return null;
+
+    const timeUs = timeSec * 1_000_000;
+
+    while (true) {
+      if (this.decodeError) throw this.decodeError;
+
+      // 1. Drain frames that are too old
+      if (this.frameQueue.length > 0) {
+        if (this.frameQueue.length > 1 && this.frameQueue[1].timestamp <= timeUs) {
+          const oldFrame = this.frameQueue.shift()!;
+          oldFrame.close();
+          continue;
+        }
+
+        try {
+          return this.frameQueue[0].clone();
+        } catch (err) {
+          this.frameQueue.shift();
+          continue;
+        }
+      }
+
+      // 2. Decode next sample if available
+      if (this.nextSampleIndex >= this.demuxed.samples.length) {
+        if (this.decoder.state === 'configured') {
+          await this.decoder.flush();
+        }
+        if (this.frameQueue.length === 0) return null;
+        continue;
+      }
+
+      const sample = this.demuxed.samples[this.nextSampleIndex++];
+      const chunk = new EncodedVideoChunk({
+        type: sample.is_sync ? 'key' : 'delta',
+        timestamp: (sample.cts * 1_000_000) / sample.timescale,
+        duration: (sample.duration * 1_000_000) / sample.timescale,
+        data: sample.data
+      });
+
+      this.decoder.decode(chunk);
+
+      if (this.frameQueue.length === 0) {
+        await new Promise<void>((resolve, reject) => {
+          this.frameResolver = resolve;
+          setTimeout(() => reject(new Error('Video decoder read timeout')), 1000);
+        }).catch((err) => {
+          throw err;
+        });
+      }
+    }
+  }
+
+  close() {
+    this.frameQueue.forEach((f) => f.close());
+    this.frameQueue = [];
+    if (this.decoder && this.decoder.state !== 'closed') {
+      try {
+        this.decoder.close();
+      } catch { /* ignore */ }
+    }
+  }
+}
+
+// ─── Main Exporter Function ──────────────────────────────────────────────────
 export async function exportProjectWebCodecs(
   project: Project,
   settings: ExportSettings,
@@ -25,22 +241,18 @@ export async function exportProjectWebCodecs(
 ): Promise<Blob> {
   const { width, height, fps, bitrate, upscaleMode, onUpscaleProgress } = settings;
 
-  // Determine rendering resolution vs final export resolution
   const renderWidth = upscaleMode === 'ai' ? Math.round(width / 2) : width;
   const renderHeight = upscaleMode === 'ai' ? Math.round(height / 2) : height;
 
-  // Initialise AI upscaler if requested (load model from CDN / IDB cache)
   if (upscaleMode === 'ai' && !isUpscalerReady()) {
     await initUpscaler(onUpscaleProgress);
     onUpscaleProgress?.('', 0);
   }
 
-  // 1. Render mixed audio track
   onProgress(5);
   const audioBuffer = await mixAudioTracks(project, 44100);
   onProgress(15);
 
-  // Calculate total duration in milliseconds
   let durationMs = 0;
   for (const track of project.tracks) {
     for (const clip of track.clips) {
@@ -48,11 +260,10 @@ export async function exportProjectWebCodecs(
       if (endMs > durationMs) durationMs = endMs;
     }
   }
-  if (durationMs === 0) durationMs = 5000; // fallback 5s
+  if (durationMs === 0) durationMs = 5000;
 
   const totalFrames = Math.ceil((durationMs / 1000) * fps);
 
-  // 2. Setup mp4-muxer
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
     video: {
@@ -70,7 +281,6 @@ export async function exportProjectWebCodecs(
 
   let encodeError: Error | null = null;
 
-  // 3. Initialize encoders
   const videoEncoder = new VideoEncoder({
     output: (chunk, metadata) => muxer.addVideoChunk(chunk, metadata),
     error: (e) => {
@@ -79,16 +289,14 @@ export async function exportProjectWebCodecs(
     }
   });
 
-  // H.264 High Profile (avc1.6400xx) provides superior compression quality compared to Main Profile
   const codec = (width > 1920 || height > 1080) ? 'avc1.640033' : 'avc1.64002a';
-
   videoEncoder.configure({
     codec,
     width,
     height,
     bitrate,
     framerate: fps,
-    bitrateMode: 'variable', // Enable Variable Bitrate (VBR) for higher quality in complex scenes
+    bitrateMode: 'variable',
     hardwareAcceleration: 'prefer-hardware'
   });
 
@@ -103,36 +311,58 @@ export async function exportProjectWebCodecs(
     });
 
     audioEncoder.configure({
-      codec: 'mp4a.40.2', // AAC-LC
+      codec: 'mp4a.40.2',
       numberOfChannels: 2,
-      sampleRate: audioBuffer.sampleRate, // Match mixed audio sample rate
+      sampleRate: audioBuffer.sampleRate,
       bitrate: 128000
     });
   }
 
-  // 4. Create and load off-screen video and image elements
+  // 4. Preload visual and audio assets
   const videoElements = new Map<string, HTMLVideoElement>();
   const imageElements = new Map<string, HTMLImageElement>();
+  const videoReaders = new Map<string, VideoDecoderReader>();
+
   for (const track of project.tracks) {
     for (const clip of track.clips) {
-      if (clip.type === 'video' && clip.assetId && !videoElements.has(clip.assetId)) {
-        try {
-          const asset = await db.assets.get(clip.assetId);
-          if (asset) {
-            const file = await getFileFromOPFS(asset.opfsPath);
-            const url = URL.createObjectURL(file);
-            const video = document.createElement('video');
-            video.src = url;
-            video.muted = true;
-            video.playsInline = true;
-            video.preload = 'auto';
-            await new Promise((resolve) => {
-              video.onloadedmetadata = resolve;
-            });
-            videoElements.set(clip.assetId, video);
+      if (clip.type === 'video' && clip.assetId) {
+        // Pre-create high performance WebCodecs Reader
+        if (!videoReaders.has(clip.id)) {
+          try {
+            const asset = await db.assets.get(clip.assetId);
+            if (asset) {
+              const file = await getFileFromOPFS(asset.opfsPath);
+              const arrayBuffer = await file.arrayBuffer();
+              const reader = new VideoDecoderReader(arrayBuffer);
+              await reader.init(clip.trimStartMs / 1000);
+              videoReaders.set(clip.id, reader);
+              console.log(`[Exporter] Initialized hardware reader for clip: ${clip.id}`);
+            }
+          } catch (err) {
+            console.warn(`[Exporter] Failed to initialize hardware reader for clip ${clip.id}, will use seek fallback:`, err);
           }
-        } catch (err) {
-          console.warn(`Failed to preload asset for export:`, err);
+        }
+
+        // Preload seek-based HTMLVideoElement fallback
+        if (!videoElements.has(clip.assetId)) {
+          try {
+            const asset = await db.assets.get(clip.assetId);
+            if (asset) {
+              const file = await getFileFromOPFS(asset.opfsPath);
+              const url = URL.createObjectURL(file);
+              const video = document.createElement('video');
+              video.src = url;
+              video.muted = true;
+              video.playsInline = true;
+              video.preload = 'auto';
+              await new Promise((resolve) => {
+                video.onloadedmetadata = resolve;
+              });
+              videoElements.set(clip.assetId, video);
+            }
+          } catch (err) {
+            console.warn(`[Exporter] Failed to preload fallback video element:`, err);
+          }
         }
       } else if (clip.type === 'image' && clip.assetId && !imageElements.has(clip.assetId)) {
         try {
@@ -167,7 +397,6 @@ export async function exportProjectWebCodecs(
   offscreen.height = renderHeight;
   const offCtx = offscreen.getContext('2d');
 
-  // Blend mode mapping
   const blendModeMap: Record<string, string> = {
     normal: 'source-over',
     multiply: 'multiply',
@@ -181,8 +410,6 @@ export async function exportProjectWebCodecs(
     'hard-light': 'hard-light'
   };
 
-  // Pre-allocate reusable canvases for effect-track compositing and enhanced upscale.
-  // These are re-dimensioned only when the render size changes (never inside the loop).
   const effectFilterCanvas = document.createElement('canvas');
   effectFilterCanvas.width = renderWidth;
   effectFilterCanvas.height = renderHeight;
@@ -191,7 +418,6 @@ export async function exportProjectWebCodecs(
   effectVideoCanvas.width = renderWidth;
   effectVideoCanvas.height = renderHeight;
 
-  // Pre-allocate the enhanced-upscale output canvas (only used in 'enhanced' mode).
   let enhancedCanvas: HTMLCanvasElement | null = null;
   let enhancedCtx: CanvasRenderingContext2D | null = null;
   if (upscaleMode === 'enhanced') {
@@ -203,122 +429,145 @@ export async function exportProjectWebCodecs(
     enhancedCtx.imageSmoothingQuality = 'high';
   }
 
-  // Helper: close encoders + revoke all blob URLs on any exit (cancel OR error).
   const cleanupOnExit = () => {
     try { if (videoEncoder.state !== 'closed') videoEncoder.close(); } catch { /* ignore */ }
     try { if (audioEncoder && audioEncoder.state !== 'closed') audioEncoder.close(); } catch { /* ignore */ }
     videoElements.forEach((video) => { URL.revokeObjectURL(video.src); video.remove(); });
     imageElements.forEach((img) => { URL.revokeObjectURL(img.src); });
+    videoReaders.forEach((reader) => {
+      try {
+        reader.close();
+      } catch { /* ignore */ }
+    });
   };
 
   // 6. Draw and Encode video frame by frame
   try {
-  for (let f = 0; f < totalFrames; f++) {
-    if (isCancelled()) {
-      cleanupOnExit();
-      throw new Error('Export cancelled');
-    }
-    if (encodeError) throw encodeError;
-    const timeMs = (f / fps) * 1000;
-
-    // Draw background
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, renderWidth, renderHeight);
-
-    // Render active tracks in reverse track order (from bottom to top)
-    // Loop in reverse so bottom tracks (higher index) are drawn first, and top tracks (index 0) are drawn last
-    const activeVisualClips: { clip: TimelineClip; trackHidden: boolean; type: 'video' | 'image' }[] = [];
-    const activeTextClips: { clip: TimelineClip; trackHidden: boolean }[] = [];
-
-    for (let i = project.tracks.length - 1; i >= 0; i--) {
-      const track = project.tracks[i];
-      const activeClips = track.clips.filter(c => timeMs >= c.positionMs && timeMs < c.positionMs + c.durationMs);
-      for (const clip of activeClips) {
-        if (track.type === 'video' || (track.type as string) === 'image') {
-          if (clip.type === 'video') activeVisualClips.push({ clip, trackHidden: !!track.hidden, type: 'video' });
-          if (clip.type === 'image') activeVisualClips.push({ clip, trackHidden: !!track.hidden, type: 'image' });
-        }
-        if (track.type === 'text') activeTextClips.push({ clip, trackHidden: !!track.hidden });
+    for (let f = 0; f < totalFrames; f++) {
+      if (isCancelled()) {
+        cleanupOnExit();
+        throw new Error('Export cancelled');
       }
-    }
+      if (encodeError) throw encodeError;
+      const timeMs = (f / fps) * 1000;
 
-    // Draw visual tracks
-    for (const { clip, trackHidden, type } of activeVisualClips) {
-      if (trackHidden) continue;
-      if (type === 'video') {
-      const video = clip.assetId ? videoElements.get(clip.assetId) : null;
-      if (video) {
-        const speed = clip.speed || 1.0;
-        const offset = timeMs - clip.positionMs;
-        const sourceTime = (clip.trimStartMs + offset * speed) / 1000;
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, renderWidth, renderHeight);
 
-        // Seek video element to target time
-        video.currentTime = sourceTime;
-        await new Promise((resolve) => {
-          video.onseeked = resolve;
-        });
+      const activeVisualClips: { clip: TimelineClip; trackHidden: boolean; type: 'video' | 'image' }[] = [];
+      const activeTextClips: { clip: TimelineClip; trackHidden: boolean }[] = [];
 
-        // Set opacity
-        let opacity = 1.0;
-        const fadeIn = clip.fadeInMs || 0;
-        const fadeOut = clip.fadeOutMs || 0;
-
-        // Determine active transition — prefer new transitionIn, fall back to legacy transitionType
-        const activeTrans = clip.transitionIn
-          ? { type: clip.transitionIn.type, durationMs: clip.transitionIn.durationMs }
-          : clip.transitionType && clip.transitionType !== 'none'
-            ? { type: clip.transitionType, durationMs: fadeIn }
-            : null;
-        const hasTransition = !!activeTrans && offset < (activeTrans.durationMs || fadeIn);
-        const transProgress = hasTransition ? offset / (activeTrans!.durationMs || fadeIn) : 1;
-
-        if (hasTransition) {
-          opacity = 1.0;
-        } else if (offset < fadeIn && fadeIn > 0) {
-          opacity = offset / fadeIn;
-        } else if (offset > clip.durationMs - fadeOut && fadeOut > 0) {
-          opacity = (clip.positionMs + clip.durationMs - timeMs) / fadeOut;
-        }
-
-        // Apply keyframed opacity multiplier
-        const keyframeOpacity = evaluateKeyframe(clip.keyframes?.opacity, offset, 100) / 100;
-        opacity = opacity * keyframeOpacity;
-
-        ctx.save();
-        ctx.globalAlpha = Math.max(0, Math.min(opacity, 1.0));
-
-        // Draw dip/flash overlay for supported transitions
-        if (hasTransition && activeTrans) {
-          drawTransitionOverlay(ctx as CanvasRenderingContext2D, activeTrans.type, transProgress, renderWidth, renderHeight);
-        }
-
-        // Draw preceding clip for transitions
-        if (hasTransition) {
-          let prevClip = null;
-          const track = project.tracks.find(t => t.clips.some(c => c.id === clip.id));
-          if (track) {
-            const sortedClips = [...track.clips].sort((a, b) => a.positionMs - b.positionMs);
-            const idx = sortedClips.findIndex(c => c.id === clip.id);
-            if (idx > 0) prevClip = sortedClips[idx - 1];
+      for (let i = project.tracks.length - 1; i >= 0; i--) {
+        const track = project.tracks[i];
+        const activeClips = track.clips.filter(c => timeMs >= c.positionMs && timeMs < c.positionMs + c.durationMs);
+        for (const clip of activeClips) {
+          if (track.type === 'video' || (track.type as string) === 'image') {
+            if (clip.type === 'video') activeVisualClips.push({ clip, trackHidden: !!track.hidden, type: 'video' });
+            if (clip.type === 'image') activeVisualClips.push({ clip, trackHidden: !!track.hidden, type: 'image' });
           }
-          if (prevClip) {
-            const prevVideo = prevClip.assetId ? videoElements.get(prevClip.assetId) : null;
-            if (prevVideo) {
-              prevVideo.currentTime = prevClip.trimEndMs / 1000;
-              await new Promise((resolve) => {
-                prevVideo.onseeked = resolve;
-              });
-              // Calculate aspect ratio preserving destination rectangle for prevVideo
-              const prevWidth = prevVideo.videoWidth || renderWidth;
-              const prevHeight = prevVideo.videoHeight || renderHeight;
-              const prevSrcRatio = prevWidth / prevHeight;
+          if (track.type === 'text') activeTextClips.push({ clip, trackHidden: !!track.hidden });
+        }
+      }
+
+      for (const { clip, trackHidden, type } of activeVisualClips) {
+        if (trackHidden) continue;
+        if (type === 'video') {
+          const speed = clip.speed || 1.0;
+          const offset = timeMs - clip.positionMs;
+          const sourceTime = (clip.trimStartMs + offset * speed) / 1000;
+
+          // Attempt WebCodecs frame decode
+          let frameToDraw: VideoFrame | null = null;
+          const reader = videoReaders.get(clip.id);
+          if (reader) {
+            try {
+              frameToDraw = await reader.getFrameAt(sourceTime);
+            } catch (err) {
+              console.warn(`[Exporter] Hardware decode failed for clip ${clip.id}, falling back:`, err);
+            }
+          }
+
+          const fallbackVideo = clip.assetId ? videoElements.get(clip.assetId) : null;
+          if (!frameToDraw && fallbackVideo) {
+            fallbackVideo.currentTime = sourceTime;
+            await new Promise((resolve) => {
+              fallbackVideo.onseeked = resolve;
+            });
+          }
+
+          const srcWidth = frameToDraw ? frameToDraw.displayWidth : (fallbackVideo ? fallbackVideo.videoWidth : renderWidth);
+          const srcHeight = frameToDraw ? frameToDraw.displayHeight : (fallbackVideo ? fallbackVideo.videoHeight : renderHeight);
+          const srcRatio = srcWidth / (srcHeight || 1);
+          const destRatio = renderWidth / renderHeight;
+
+          let opacity = 1.0;
+          const fadeIn = clip.fadeInMs || 0;
+          const fadeOut = clip.fadeOutMs || 0;
+
+          const activeTrans = clip.transitionIn
+            ? { type: clip.transitionIn.type, durationMs: clip.transitionIn.durationMs }
+            : clip.transitionType && clip.transitionType !== 'none'
+              ? { type: clip.transitionType, durationMs: fadeIn }
+              : null;
+          const hasTransition = !!activeTrans && offset < (activeTrans.durationMs || fadeIn);
+          const transProgress = hasTransition ? offset / (activeTrans!.durationMs || fadeIn) : 1;
+
+          if (hasTransition) {
+            opacity = 1.0;
+          } else if (offset < fadeIn && fadeIn > 0) {
+            opacity = offset / fadeIn;
+          } else if (offset > clip.durationMs - fadeOut && fadeOut > 0) {
+            opacity = (clip.positionMs + clip.durationMs - timeMs) / fadeOut;
+          }
+
+          const keyframeOpacity = evaluateKeyframe(clip.keyframes?.opacity, offset, 100) / 100;
+          opacity = opacity * keyframeOpacity;
+
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, Math.min(opacity, 1.0));
+
+          if (hasTransition && activeTrans) {
+            drawTransitionOverlay(ctx as CanvasRenderingContext2D, activeTrans.type, transProgress, renderWidth, renderHeight);
+          }
+
+          if (hasTransition) {
+            let prevClip: TimelineClip | null = null;
+            const track = project.tracks.find(t => t.clips.some(c => c.id === clip.id));
+            if (track) {
+              const sortedClips = [...track.clips].sort((a, b) => a.positionMs - b.positionMs);
+              const idx = sortedClips.findIndex(c => c.id === clip.id);
+              if (idx > 0) prevClip = sortedClips[idx - 1];
+            }
+            if (prevClip) {
+              const prevTime = prevClip.trimEndMs / 1000;
+              let prevFrameToDraw: VideoFrame | null = null;
+              const prevReader = videoReaders.get(prevClip.id);
+              if (prevReader) {
+                try {
+                  prevFrameToDraw = await prevReader.getFrameAt(prevTime);
+                } catch (err) {
+                  console.warn(`[Exporter] Transition preceding frame decode failed:`, err);
+                }
+              }
+
+              const prevVideo = prevClip.assetId ? videoElements.get(prevClip.assetId) : null;
+              if (!prevFrameToDraw && prevVideo) {
+                prevVideo.currentTime = prevTime;
+                await new Promise((resolve) => {
+                  prevVideo.onseeked = resolve;
+                });
+              }
+
+              const pWidth = prevFrameToDraw ? prevFrameToDraw.displayWidth : (prevVideo ? prevVideo.videoWidth : renderWidth);
+              const pHeight = prevFrameToDraw ? prevFrameToDraw.displayHeight : (prevVideo ? prevVideo.videoHeight : renderHeight);
+              const prevSrcRatio = pWidth / (pHeight || 1);
               const prevDestRatio = renderWidth / renderHeight;
-              
+
               let pdWidth = renderWidth;
               let pdHeight = renderHeight;
               let pdx = 0;
               let pdy = 0;
-              
+
               if (prevSrcRatio > prevDestRatio) {
                 pdHeight = renderWidth / prevSrcRatio;
                 pdy = (renderHeight - pdHeight) / 2;
@@ -326,155 +575,206 @@ export async function exportProjectWebCodecs(
                 pdWidth = renderHeight * prevSrcRatio;
                 pdx = (renderWidth - pdWidth) / 2;
               }
-              
+
               ctx.save();
-              ctx.drawImage(prevVideo, pdx, pdy, pdWidth, pdHeight);
+              ctx.drawImage(prevFrameToDraw || prevVideo!, pdx, pdy, pdWidth, pdHeight);
               ctx.restore();
-            }
-          }
-        }
 
-        // Apply filters
-        let filterString = '';
-        if (clip.colorAdjustments) {
-          const { brightness, contrast, saturation } = clip.colorAdjustments;
-          filterString += `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%) `;
-        }
-        if (clip.filterSettings && clip.filterSettings.type !== 'none') {
-          const { type, intensity } = clip.filterSettings;
-          if (type === 'bw') filterString += `grayscale(${intensity}%) `;
-          else if (type === 'sepia') filterString += `sepia(${intensity}%) `;
-          else if (type === 'vintage') filterString += `sepia(${intensity * 0.4}%) hue-rotate(30deg) contrast(${100 - intensity * 0.2}%) `;
-          else if (type === 'warm') filterString += `sepia(${intensity * 0.3}%) saturate(${100 + intensity * 0.2}%) `;
-          else if (type === 'cool') filterString += `hue-rotate(190deg) saturate(${100 + intensity * 0.1}%) `;
-          else if (type === 'cyberpunk') filterString += `hue-rotate(300deg) contrast(1.1) saturate(${100 + intensity * 0.5}%) `;
-          else if (type === 'cinematic') filterString += `contrast(${100 + intensity * 0.2}%) saturate(${100 - intensity * 0.1}%) `;
-        }
-        // Apply CSS-based videoEffects from effects-registry
-        if (clip.videoEffects) {
-          for (const eff of clip.videoEffects) {
-            const effFilter = buildEffectFilterString(eff.id, eff.intensity);
-            if (effFilter) filterString += effFilter + ' ';
-          }
-        }
-
-        ctx.filter = filterString.trim() || 'none';
-
-        // Apply blends & transforms
-        const blend = clip.transform?.blendMode || 'normal';
-        ctx.globalCompositeOperation = (blendModeMap[blend] || 'source-over') as GlobalCompositeOperation;
-
-        const cx = renderWidth / 2;
-        const cy = renderHeight / 2;
-        
-        // Evaluate keyframes, fallback to transform
-        const tx = evaluateKeyframe(clip.keyframes?.x, offset, clip.transform?.x || 0);
-        const ty = evaluateKeyframe(clip.keyframes?.y, offset, clip.transform?.y || 0);
-        const tRotation = evaluateKeyframe(clip.keyframes?.rotation, offset, clip.transform?.rotation || 0);
-        const rawScale = evaluateKeyframe(clip.keyframes?.scale, offset, clip.transform?.scale !== undefined ? clip.transform.scale : 100);
-        const tScale = rawScale / 100;
-
-        ctx.save();
-
-        // Apply wipe clip-region for wipe transitions (before translate)
-        const isWipe = hasTransition && activeTrans && ['wipe-left','wipe-right','wipe-up','wipe-down'].includes(activeTrans.type);
-        if (isWipe && activeTrans) {
-          ctx.save();
-          applyWipeClip(ctx as CanvasRenderingContext2D, activeTrans.type, transProgress, renderWidth, renderHeight);
-        }
-
-        ctx.translate(cx + tx, cy + ty);
-
-        // Apply transition displacement using registry (with smoothstep easing)
-        if (hasTransition && activeTrans && !isWipe) {
-          applyTransitionTransform(
-            ctx as CanvasRenderingContext2D,
-            activeTrans.type,
-            transProgress,
-            renderWidth,
-            renderHeight,
-            timeMs
-          );
-        }
-
-        if (tRotation !== 0) ctx.rotate((tRotation * Math.PI) / 180);
-        if (tScale !== 1) ctx.scale(tScale, tScale);
-
-        // Calculate aspect ratio preserving destination rectangle (contain fit)
-        const videoWidth = video.videoWidth || renderWidth;
-        const videoHeight = video.videoHeight || renderHeight;
-        const srcRatio = videoWidth / videoHeight;
-        const destRatio = renderWidth / renderHeight;
-        
-        let dWidth = renderWidth;
-        let dHeight = renderHeight;
-        let dx = 0;
-        let dy = 0;
-        
-        if (srcRatio > destRatio) {
-          // Video is wider than project (letterbox)
-          dHeight = renderWidth / srcRatio;
-          dy = (renderHeight - dHeight) / 2;
-        } else {
-          // Video is taller than project (pillarbox)
-          dWidth = renderHeight * srcRatio;
-          dx = (renderWidth - dWidth) / 2;
-        }
-
-        let drawSource: CanvasImageSource = video;
-
-        if (offCtx) {
-          offCtx.filter = filterString.trim() || 'none';
-          offCtx.drawImage(video, dx, dy, dWidth, dHeight);
-          offCtx.filter = 'none';
-
-          // Apply canvas-based video effects (pixel ops) from effects-registry
-          if (clip.videoEffects) {
-            for (const eff of clip.videoEffects) {
-              applyCanvasEffect(
-                offCtx as CanvasRenderingContext2D,
-                eff.id,
-                eff.intensity,
-                renderWidth,
-                renderHeight,
-                timeMs
-              );
-            }
-          }
-
-          // Chroma Key Green Screen Removal
-          if (clip.chromaKey && clip.chromaKey.enabled) {
-            const imgData = offCtx.getImageData(0, 0, renderWidth, renderHeight);
-            const data = imgData.data;
-            const targetHex = clip.chromaKey.color || '#00ff00';
-            const rTarget = parseInt(targetHex.slice(1, 3), 16);
-            const gTarget = parseInt(targetHex.slice(3, 5), 16);
-            const bTarget = parseInt(targetHex.slice(5, 7), 16);
-            const tolerance = clip.chromaKey.tolerance || 30;
-            const feather = clip.chromaKey.feather || 10;
-
-            for (let i = 0; i < data.length; i += 4) {
-              const r = data[i];
-              const g = data[i+1];
-              const b = data[i+2];
-              const dist = Math.sqrt((r - rTarget)**2 + (g - gTarget)**2 + (b - bTarget)**2);
-              if (dist < tolerance) {
-                data[i+3] = 0;
-              } else if (dist < tolerance + feather) {
-                const ratio = (dist - tolerance) / feather;
-                data[i+3] = Math.min(data[i+3], ratio * 255);
+              if (prevFrameToDraw) {
+                prevFrameToDraw.close();
               }
             }
-            offCtx.putImageData(imgData, 0, 0);
           }
 
-          // HSL Shifts
-          if (clip.hslAdjustments) {
-            const hShift = clip.hslAdjustments.hue || 0;
-            const sShift = clip.hslAdjustments.saturation || 0;
-            const lShift = clip.hslAdjustments.lightness || 0;
+          let filterString = '';
+          if (clip.colorAdjustments) {
+            const { brightness, contrast, saturation } = clip.colorAdjustments;
+            filterString += `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%) `;
+          }
+          if (clip.filterSettings && clip.filterSettings.type !== 'none') {
+            const { type, intensity } = clip.filterSettings;
+            if (type === 'bw') filterString += `grayscale(${intensity}%) `;
+            else if (type === 'sepia') filterString += `sepia(${intensity}%) `;
+            else if (type === 'vintage') filterString += `sepia(${intensity * 0.4}%) hue-rotate(30deg) contrast(${100 - intensity * 0.2}%) `;
+            else if (type === 'warm') filterString += `sepia(${intensity * 0.3}%) saturate(${100 + intensity * 0.2}%) `;
+            else if (type === 'cool') filterString += `hue-rotate(190deg) saturate(${100 + intensity * 0.1}%) `;
+            else if (type === 'cyberpunk') filterString += `hue-rotate(300deg) contrast(1.1) saturate(${100 + intensity * 0.5}%) `;
+            else if (type === 'cinematic') filterString += `contrast(${100 + intensity * 0.2}%) saturate(${100 - intensity * 0.1}%) `;
+          }
+          if (clip.videoEffects) {
+            for (const eff of clip.videoEffects) {
+              const effFilter = buildEffectFilterString(eff.id, eff.intensity);
+              if (effFilter) filterString += effFilter + ' ';
+            }
+          }
 
-            if (hShift !== 0 || sShift !== 0 || lShift !== 0) {
+          ctx.filter = filterString.trim() || 'none';
+
+          const blend = clip.transform?.blendMode || 'normal';
+          ctx.globalCompositeOperation = (blendModeMap[blend] || 'source-over') as GlobalCompositeOperation;
+
+          const cx = renderWidth / 2;
+          const cy = renderHeight / 2;
+
+          const tx = evaluateKeyframe(clip.keyframes?.x, offset, clip.transform?.x || 0);
+          const ty = evaluateKeyframe(clip.keyframes?.y, offset, clip.transform?.y || 0);
+          const tRotation = evaluateKeyframe(clip.keyframes?.rotation, offset, clip.transform?.rotation || 0);
+          const rawScale = evaluateKeyframe(clip.keyframes?.scale, offset, clip.transform?.scale !== undefined ? clip.transform.scale : 100);
+          const tScale = rawScale / 100;
+
+          ctx.save();
+
+          const isWipe = hasTransition && activeTrans && ['wipe-left','wipe-right','wipe-up','wipe-down'].includes(activeTrans.type);
+          if (isWipe && activeTrans) {
+            ctx.save();
+            applyWipeClip(ctx as CanvasRenderingContext2D, activeTrans.type, transProgress, renderWidth, renderHeight);
+          }
+
+          ctx.translate(cx + tx, cy + ty);
+
+          if (hasTransition && activeTrans && !isWipe) {
+            applyTransitionTransform(
+              ctx as CanvasRenderingContext2D,
+              activeTrans.type,
+              transProgress,
+              renderWidth,
+              renderHeight,
+              timeMs
+            );
+          }
+
+          if (tRotation !== 0) ctx.rotate((tRotation * Math.PI) / 180);
+          if (tScale !== 1) ctx.scale(tScale, tScale);
+
+          let dWidth = renderWidth;
+          let dHeight = renderHeight;
+          let dx = 0;
+          let dy = 0;
+
+          if (srcRatio > destRatio) {
+            dHeight = renderWidth / srcRatio;
+            dy = (renderHeight - dHeight) / 2;
+          } else {
+            dWidth = renderHeight * srcRatio;
+            dx = (renderWidth - dWidth) / 2;
+          }
+
+          const drawSource = frameToDraw || fallbackVideo!;
+
+          if (offCtx) {
+            offCtx.filter = filterString.trim() || 'none';
+            offCtx.drawImage(drawSource, dx, dy, dWidth, dHeight);
+            offCtx.filter = 'none';
+
+            if (clip.videoEffects) {
+              for (const eff of clip.videoEffects) {
+                applyCanvasEffect(
+                  offCtx as CanvasRenderingContext2D,
+                  eff.id,
+                  eff.intensity,
+                  renderWidth,
+                  renderHeight,
+                  timeMs
+                );
+              }
+            }
+
+            if (clip.chromaKey && clip.chromaKey.enabled) {
+              const imgData = offCtx.getImageData(0, 0, renderWidth, renderHeight);
+              const data = imgData.data;
+              const targetHex = clip.chromaKey.color || '#00ff00';
+              const rTarget = parseInt(targetHex.slice(1, 3), 16);
+              const gTarget = parseInt(targetHex.slice(3, 5), 16);
+              const bTarget = parseInt(targetHex.slice(5, 7), 16);
+              const tolerance = clip.chromaKey.tolerance || 30;
+              const feather = clip.chromaKey.feather || 10;
+
+              for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i+1];
+                const b = data[i+2];
+                const dist = Math.sqrt((r - rTarget)**2 + (g - gTarget)**2 + (b - bTarget)**2);
+                if (dist < tolerance) {
+                  data[i+3] = 0;
+                } else if (dist < tolerance + feather) {
+                  const ratio = (dist - tolerance) / feather;
+                  data[i+3] = Math.min(data[i+3], ratio * 255);
+                }
+              }
+              offCtx.putImageData(imgData, 0, 0);
+            }
+
+            if (clip.hslAdjustments) {
+              const hShift = clip.hslAdjustments.hue || 0;
+              const sShift = clip.hslAdjustments.saturation || 0;
+              const lShift = clip.hslAdjustments.lightness || 0;
+
+              if (hShift !== 0 || sShift !== 0 || lShift !== 0) {
+                const imgData = offCtx.getImageData(0, 0, renderWidth, renderHeight);
+                const data = imgData.data;
+                for (let i = 0; i < data.length; i += 4) {
+                  if (data[i+3] === 0) continue;
+                  let r = data[i] / 255;
+                  let g = data[i+1] / 255;
+                  let b = data[i+2] / 255;
+                  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+                  let h = 0, s = 0, l = (max + min) / 2;
+
+                  if (max !== min) {
+                    const d = max - min;
+                    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+                    switch (max) {
+                      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                      case g: h = (b - r) / d + 2; break;
+                      case b: h = (r - g) / d + 4; break;
+                    }
+                    h /= 6;
+                  }
+
+                  h = (h * 360 + hShift + 360) % 360 / 360;
+                  s = Math.max(0, Math.min(1, s + sShift / 100));
+                  l = Math.max(0, Math.min(1, l + lShift / 100));
+
+                  let rNew = l, gNew = l, bNew = l;
+                  if (s !== 0) {
+                    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+                    const p = 2 * l - q;
+                    const hue2rgb = (t: number) => {
+                      if (t < 0) t += 1;
+                      if (t > 1) t -= 1;
+                      if (t < 1/6) return p + (q - p) * 6 * t;
+                      if (t < 1/2) return q;
+                      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                      return p;
+                    };
+                    rNew = hue2rgb(h + 1/3);
+                    gNew = hue2rgb(h);
+                    bNew = hue2rgb(h - 1/3);
+                  }
+
+                  data[i] = Math.round(rNew * 255);
+                  data[i+1] = Math.round(gNew * 255);
+                  data[i+2] = Math.round(bNew * 255);
+                }
+                offCtx.putImageData(imgData, 0, 0);
+              }
+            }
+
+            let lutEntry: Lut3D | null = null;
+            const lutText = clip.colorCorrection?.lutContent;
+            if (lutText) {
+              const parsed = parseCubeLUT(lutText);
+              if (parsed) lutEntry = parsed;
+            }
+
+            const lift = clip.colorCorrection?.lift || { r: 0, g: 0, b: 0 };
+            const gamma = clip.colorCorrection?.gamma || { r: 0, g: 0, b: 0 };
+            const gain = clip.colorCorrection?.gain || { r: 0, g: 0, b: 0 };
+            const hasLGG = lift.r !== 0 || lift.g !== 0 || lift.b !== 0 ||
+                           gamma.r !== 0 || gamma.g !== 0 || gamma.b !== 0 ||
+                           gain.r !== 0 || gain.g !== 0 || gain.b !== 0;
+
+            if (lutEntry || hasLGG) {
               const imgData = offCtx.getImageData(0, 0, renderWidth, renderHeight);
               const data = imgData.data;
               for (let i = 0; i < data.length; i += 4) {
@@ -482,131 +782,68 @@ export async function exportProjectWebCodecs(
                 let r = data[i] / 255;
                 let g = data[i+1] / 255;
                 let b = data[i+2] / 255;
-                const max = Math.max(r, g, b), min = Math.min(r, g, b);
-                let h = 0, s = 0, l = (max + min) / 2;
 
-                if (max !== min) {
-                  const d = max - min;
-                  s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-                  switch (max) {
-                    case r: h = (g - b) / d + (g < b ? 6 : 0); break;
-                    case g: h = (b - r) / d + 2; break;
-                    case b: h = (r - g) / d + 4; break;
-                  }
-                  h /= 6;
+                if (lutEntry) {
+                  const res = applyLut3D(r, g, b, lutEntry.table, lutEntry.size);
+                  r = res.r; g = res.g; b = res.b;
                 }
-
-                h = (h * 360 + hShift + 360) % 360 / 360;
-                s = Math.max(0, Math.min(1, s + sShift / 100));
-                l = Math.max(0, Math.min(1, l + lShift / 100));
-
-                let rNew = l, gNew = l, bNew = l;
-                if (s !== 0) {
-                  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-                  const p = 2 * l - q;
-                  const hue2rgb = (t: number) => {
-                    if (t < 0) t += 1;
-                    if (t > 1) t -= 1;
-                    if (t < 1/6) return p + (q - p) * 6 * t;
-                    if (t < 1/2) return q;
-                    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
-                    return p;
-                  };
-                  rNew = hue2rgb(h + 1/3);
-                  gNew = hue2rgb(h);
-                  bNew = hue2rgb(h - 1/3);
+                if (hasLGG) {
+                  r = r + (lift.r / 100) * (1 - r);
+                  g = g + (lift.g / 100) * (1 - g);
+                  b = b + (lift.b / 100) * (1 - b);
+                  r = Math.max(0, Math.min(1, r + Math.sin(r * Math.PI) * (gamma.r / 100)));
+                  g = Math.max(0, Math.min(1, g + Math.sin(g * Math.PI) * (gamma.g / 100)));
+                  b = Math.max(0, Math.min(1, b + Math.sin(b * Math.PI) * (gamma.b / 100)));
+                  r = r * (1 + gain.r / 100);
+                  g = g * (1 + gain.g / 100);
+                  b = b * (1 + gain.b / 100);
                 }
-
-                data[i] = Math.round(rNew * 255);
-                data[i+1] = Math.round(gNew * 255);
-                data[i+2] = Math.round(bNew * 255);
+                data[i] = Math.round(Math.max(0, Math.min(1, r)) * 255);
+                data[i+1] = Math.round(Math.max(0, Math.min(1, g)) * 255);
+                data[i+2] = Math.round(Math.max(0, Math.min(1, b)) * 255);
               }
               offCtx.putImageData(imgData, 0, 0);
             }
+
+            ctx.drawImage(offscreen, -cx, -cy, renderWidth, renderHeight);
+          } else {
+            ctx.drawImage(drawSource, -cx, -cy, renderWidth, renderHeight);
           }
 
-          // LUT & Lift/Gamma/Gain color correction
-          let lutEntry: Lut3D | null = null;
-          const lutText = clip.colorCorrection?.lutContent;
-          if (lutText) {
-            const parsed = parseCubeLUT(lutText);
-            if (parsed) lutEntry = parsed;
+          if (isWipe) ctx.restore();
+
+          if (clip.colorAdjustments && clip.colorAdjustments.temp !== 0) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'color';
+            const tempVal = clip.colorAdjustments.temp;
+            ctx.fillStyle = tempVal > 0 
+              ? `rgba(255, 140, 0, ${Math.abs(tempVal) / 250})` 
+              : `rgba(0, 191, 255, ${Math.abs(tempVal) / 250})`;
+            ctx.fillRect(-cx, -cy, renderWidth, renderHeight);
+            ctx.restore();
+          }
+          if (clip.colorAdjustments && clip.colorAdjustments.vignette > 0) {
+            const strength = clip.colorAdjustments.vignette / 100;
+            ctx.save();
+            const gradient = ctx.createRadialGradient(0, 0, renderHeight * 0.3, 0, 0, renderWidth * 0.8);
+            gradient.addColorStop(0, 'rgba(0,0,0,0)');
+            gradient.addColorStop(1, `rgba(0,0,0,${strength * 0.85})`);
+            ctx.fillStyle = gradient;
+            ctx.fillRect(-cx, -cy, renderWidth, renderHeight);
+            ctx.restore();
           }
 
-          const lift = clip.colorCorrection?.lift || { r: 0, g: 0, b: 0 };
-          const gamma = clip.colorCorrection?.gamma || { r: 0, g: 0, b: 0 };
-          const gain = clip.colorCorrection?.gain || { r: 0, g: 0, b: 0 };
-          const hasLGG = lift.r !== 0 || lift.g !== 0 || lift.b !== 0 ||
-                         gamma.r !== 0 || gamma.g !== 0 || gamma.b !== 0 ||
-                         gain.r !== 0 || gain.g !== 0 || gain.b !== 0;
-
-          if (offCtx && (lutEntry || hasLGG)) {
-            const imgData = offCtx.getImageData(0, 0, renderWidth, renderHeight);
-            const data = imgData.data;
-            for (let i = 0; i < data.length; i += 4) {
-              if (data[i+3] === 0) continue;
-              let r = data[i] / 255;
-              let g = data[i+1] / 255;
-              let b = data[i+2] / 255;
-
-              if (lutEntry) {
-                const res = applyLut3D(r, g, b, lutEntry.table, lutEntry.size);
-                r = res.r; g = res.g; b = res.b;
-              }
-              if (hasLGG) {
-                r = r + (lift.r / 100) * (1 - r);
-                g = g + (lift.g / 100) * (1 - g);
-                b = b + (lift.b / 100) * (1 - b);
-                r = Math.max(0, Math.min(1, r + Math.sin(r * Math.PI) * (gamma.r / 100)));
-                g = Math.max(0, Math.min(1, g + Math.sin(g * Math.PI) * (gamma.g / 100)));
-                b = Math.max(0, Math.min(1, b + Math.sin(b * Math.PI) * (gamma.b / 100)));
-                r = r * (1 + gain.r / 100);
-                g = g * (1 + gain.g / 100);
-                b = b * (1 + gain.b / 100);
-              }
-              data[i] = Math.round(Math.max(0, Math.min(1, r)) * 255);
-              data[i+1] = Math.round(Math.max(0, Math.min(1, g)) * 255);
-              data[i+2] = Math.round(Math.max(0, Math.min(1, b)) * 255);
-            }
-            offCtx.putImageData(imgData, 0, 0);
-          }
-
-          drawSource = offscreen;
-        }
-
-        ctx.drawImage(drawSource, -cx, -cy, renderWidth, renderHeight);
-        if (isWipe) ctx.restore(); // close wipe clip region
-
-        // Tint & Vignette overlay inside transformed space
-        if (clip.colorAdjustments && clip.colorAdjustments.temp !== 0) {
-          ctx.save();
-          ctx.globalCompositeOperation = 'color';
-          const tempVal = clip.colorAdjustments.temp;
-          ctx.fillStyle = tempVal > 0 
-            ? `rgba(255, 140, 0, ${Math.abs(tempVal) / 250})` 
-            : `rgba(0, 191, 255, ${Math.abs(tempVal) / 250})`;
-          ctx.fillRect(-cx, -cy, renderWidth, renderHeight);
           ctx.restore();
-        }
-        if (clip.colorAdjustments && clip.colorAdjustments.vignette > 0) {
-          const strength = clip.colorAdjustments.vignette / 100;
-          ctx.save();
-          const gradient = ctx.createRadialGradient(0, 0, renderHeight * 0.3, 0, 0, renderWidth * 0.8);
-          gradient.addColorStop(0, 'rgba(0,0,0,0)');
-          gradient.addColorStop(1, `rgba(0,0,0,${strength * 0.85})`);
-          ctx.fillStyle = gradient;
-          ctx.fillRect(-cx, -cy, renderWidth, renderHeight);
+          ctx.globalCompositeOperation = 'source-over';
           ctx.restore();
-        }
 
-        ctx.restore();
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.restore();
-      }
-    } else if (type === 'image') {
+          // Safely release the decoded VideoFrame structure
+          if (frameToDraw) {
+            frameToDraw.close();
+          }
+        } else if (type === 'image') {
         const img = clip.assetId ? imageElements.get(clip.assetId) : null;
         if (img) {
-          // Compute opacity
           let opacity = 1.0;
           const offset = timeMs - clip.positionMs;
           const fadeIn = clip.fadeInMs || 0;
@@ -638,7 +875,6 @@ export async function exportProjectWebCodecs(
           if (tRotation !== 0) ctx.rotate((tRotation * Math.PI) / 180);
           if (tScale !== 1) ctx.scale(tScale, tScale);
 
-          // Contain-fit the image
           const srcRatio = img.naturalWidth / (img.naturalHeight || 1);
           const destRatio = renderWidth / renderHeight;
           let dWidth = renderWidth;
@@ -660,7 +896,6 @@ export async function exportProjectWebCodecs(
       }
     }
 
-    // Draw text tracks
     for (const { clip, trackHidden } of activeTextClips) {
       if (trackHidden || !clip.textSettings) continue;
       const textSettings = clip.textSettings;
@@ -673,14 +908,12 @@ export async function exportProjectWebCodecs(
       ctx.restore();
     }
 
-    // Apply global effect track clips during export
     const effectTracks = project.tracks.filter(t => t.type === 'effect');
     effectTracks.forEach(track => {
       if (track.hidden || track.muted) return;
       track.clips.forEach(clip => {
         const isActive = timeMs >= clip.positionMs && timeMs < clip.positionMs + clip.durationMs;
         if (isActive) {
-          // 1. Apply filter settings
           if (clip.filterSettings && clip.filterSettings.type !== 'none') {
             const { type, intensity } = clip.filterSettings;
             let filterStr = '';
@@ -709,7 +942,6 @@ export async function exportProjectWebCodecs(
             }
 
             if (filterStr) {
-              // Reuse pre-allocated effectFilterCanvas — no allocation inside the frame loop.
               const offCtx = effectFilterCanvas.getContext('2d');
               if (offCtx) {
                 offCtx.drawImage(canvas, 0, 0);
@@ -722,10 +954,8 @@ export async function exportProjectWebCodecs(
             }
           }
 
-          // 2. Apply video effects
           if (clip.videoEffects && clip.videoEffects.length > 0) {
             clip.videoEffects.forEach(eff => {
-              // Reuse pre-allocated effectVideoCanvas — no allocation inside the frame loop.
               const offCtx = effectVideoCanvas.getContext('2d');
               if (offCtx) {
                 offCtx.drawImage(canvas, 0, 0);
@@ -756,19 +986,16 @@ export async function exportProjectWebCodecs(
       });
     });
 
-    // Capture and encode frame (with optional AI upscaling or fast enhancement)
     let frameSource: HTMLCanvasElement | OffscreenCanvas = canvas;
 
     if (upscaleMode === 'ai' && isUpscalerReady()) {
       try {
-        // Upscale: Real-ESRGAN processes canvas at current res, outputs at targetW×targetH
         frameSource = await upscaleFrame(canvas as HTMLCanvasElement, width, height);
       } catch (err) {
         console.warn('[Upscaler] Frame upscale failed, using original:', err);
         frameSource = canvas;
       }
     } else if (upscaleMode === 'enhanced' && enhancedCanvas && enhancedCtx) {
-      // Reuse pre-allocated canvas — just redraw the current frame into it.
       enhancedCtx.filter = 'contrast(1.04) saturate(1.03)';
       enhancedCtx.drawImage(canvas, 0, 0, width, height);
       enhancedCtx.filter = 'none';
@@ -782,29 +1009,22 @@ export async function exportProjectWebCodecs(
       frame.close();
     }
 
-    // Report Progress (from 15% to 85%)
     if (encodeError) throw encodeError;
     const frameProgress = 15 + Math.round((f / totalFrames) * 70);
     onProgress(frameProgress);
 
-    // Yield control to the browser event loop once every 10 frames
-    // to prevent freezes while keeping the render loop extremely fast.
     if (f % 10 === 0) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
   } finally {
-    // Always close encoders to release GPU/system codec resources,
-    // regardless of whether the export succeeded, failed, or was cancelled.
     cleanupOnExit();
   }
 
-  // Flush video encoder
   await videoEncoder.flush();
   if (encodeError) throw encodeError;
   videoEncoder.close();
 
-  // 7. Encode Mixed Audio
   if (audioBuffer && audioEncoder) {
     if (encodeError) throw encodeError;
     const channels = audioBuffer.numberOfChannels;
@@ -815,7 +1035,6 @@ export async function exportProjectWebCodecs(
     for (let offset = 0; offset < length; offset += frameSize) {
       const size = Math.min(frameSize, length - offset);
       const data = new Float32Array(size * channels);
-      // Correct planar copy for 'f32-planar' format
       for (let ch = 0; ch < channels; ch++) {
         const chData = audioBuffer.getChannelData(ch);
         const targetOffset = ch * size;
@@ -842,13 +1061,17 @@ export async function exportProjectWebCodecs(
     audioEncoder.close();
   }
 
-  // 8. Finalize Muxer and close clean video and image elements
   videoElements.forEach((video) => {
     URL.revokeObjectURL(video.src);
     video.remove();
   });
   imageElements.forEach((img) => {
     URL.revokeObjectURL(img.src);
+  });
+  videoReaders.forEach((reader) => {
+    try {
+      reader.close();
+    } catch { /* ignore */ }
   });
 
   onProgress(95);

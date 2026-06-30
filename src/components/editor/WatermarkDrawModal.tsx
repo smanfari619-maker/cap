@@ -96,14 +96,11 @@ export default function WatermarkDrawModal({
     if (!selectedRegion || !containerRef.current || !naturalWidth || !naturalHeight) return;
     
     const rect = containerRef.current.getBoundingClientRect();
-    const W_disp = rect.width;
-    const H_disp = rect.height;
-
-    // Normalize coordinates (0 to 1) and project onto natural resolution
-    const x_rel = selectedRegion.x / W_disp;
-    const y_rel = selectedRegion.y / H_disp;
-    const w_rel = selectedRegion.w / W_disp;
-    const h_rel = selectedRegion.h / H_disp;
+    
+    const x_rel = selectedRegion.x / rect.width;
+    const y_rel = selectedRegion.y / rect.height;
+    const w_rel = selectedRegion.w / rect.width;
+    const h_rel = selectedRegion.h / rect.height;
 
     const region = {
       x: Math.round(x_rel * naturalWidth),

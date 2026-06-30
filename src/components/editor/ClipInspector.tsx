@@ -836,17 +836,47 @@ export default function ClipInspector({ width }: { width: number }) {
                 </div>
 
                 <p className="text-[9px] text-zinc-600 leading-relaxed">
-                  Draw a rectangle over the watermark on the video preview. FFmpeg blurs that region locally — no uploads.
+                  Draw a rectangle over the watermark on the video preview. Runs reverse alpha blending locally — no uploads.
                 </p>
 
-                {/* Step 1: Draw region button */}
+                {/* Step 1: Draw region or Auto Remove */}
                 {!watermarkRegion && wmStatus === 'idle' && (
-                  <button
-                    onClick={() => setIsDrawModalOpen(true)}
-                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-[10px] font-semibold transition border bg-zinc-900 border-dashed border-zinc-700 hover:border-violet-500 text-zinc-400 hover:text-violet-300 cursor-pointer"
-                  >
-                    <Crosshair className="w-3.5 h-3.5" /> Draw Watermark Region
-                  </button>
+                  <div className="flex flex-col gap-2">
+                    <button
+                      onClick={async () => {
+                        if (!selectedClip?.assetId || !project) return;
+                        setWmStatus('processing');
+                        setWmProgress(0);
+                        setWmError(null);
+                        try {
+                          const asset = await db.assets.get(selectedClip.assetId);
+                          if (!asset) throw new Error('Asset not found in database.');
+                          const newAsset = await removeWatermark(
+                            asset,
+                            null, // null region triggers fully automatic scan
+                            project.id,
+                            (p) => setWmProgress(Math.round(p * 100))
+                          );
+                          await updateClip(selectedClip.id, { assetId: newAsset.id, name: newAsset.name });
+                          setWmStatus('done');
+                        } catch (err: any) {
+                          console.error('[Watermark Removal Error]', err);
+                          setWmStatus('error');
+                          setWmError(err?.message ?? String(err));
+                        }
+                      }}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-[10px] font-bold transition bg-violet-700 hover:bg-violet-600 text-white cursor-pointer"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" /> Auto Detect & Remove
+                    </button>
+                    
+                    <button
+                      onClick={() => setIsDrawModalOpen(true)}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-[10px] font-semibold transition border bg-zinc-900/50 border-dashed border-zinc-700 hover:border-zinc-500 text-zinc-400 hover:text-zinc-300 cursor-pointer"
+                    >
+                      <Crosshair className="w-3.5 h-3.5" /> Draw Region (Manual Fallback)
+                    </button>
+                  </div>
                 )}
 
                 {/* Step 2: Region set — show coords and process button */}
@@ -870,13 +900,12 @@ export default function ClipInspector({ width }: { width: number }) {
                       <button
                         onClick={async () => {
                           if (!selectedClip?.assetId || !project || !watermarkRegion) return;
-                          setWmStatus('loading');
+                          setWmStatus('processing');
+                          setWmProgress(0);
                           setWmError(null);
                           try {
                             const asset = await db.assets.get(selectedClip.assetId);
                             if (!asset) throw new Error('Asset not found in database.');
-                            setWmStatus('processing');
-                            setWmProgress(0);
                             const newAsset = await removeWatermark(
                               asset,
                               watermarkRegion,
@@ -900,11 +929,11 @@ export default function ClipInspector({ width }: { width: number }) {
                   </div>
                 )}
 
-                {/* Loading FFmpeg */}
+                {/* Loading */}
                 {wmStatus === 'loading' && (
                   <div className="flex items-center gap-2 p-2.5 bg-zinc-900 rounded-lg border border-zinc-800">
                     <div className="w-3 h-3 rounded-full border-2 border-zinc-700 border-t-violet-500 animate-spin flex-shrink-0" />
-                    <p className="text-[9px] text-zinc-400">Loading FFmpeg.wasm… (first run only)</p>
+                    <p className="text-[9px] text-zinc-400">Initializing video decoder…</p>
                   </div>
                 )}
 
