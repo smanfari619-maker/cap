@@ -12,6 +12,9 @@ let glCanvas: HTMLCanvasElement | null = null;
 let gl: WebGLRenderingContext | null = null;
 let program: WebGLProgram | null = null;
 let texture: WebGLTexture | null = null;
+// Cached output canvas — allocated once and reused across frames to avoid
+// per-frame GC pressure during AI upscale export.
+let outCanvas: HTMLCanvasElement | null = null;
 
 // Vertex Shader: Pass coordinate data
 const vsSource = `
@@ -179,10 +182,15 @@ export async function upscaleFrame(
   // Draw full-viewport quad through upscaler shader
   context.drawArrays(context.TRIANGLE_STRIP, 0, 4);
 
-  // Copy output to a 2D canvas to avoid WebGL context sharing side effects in WebCodecs/DOM
-  const outCanvas = document.createElement('canvas');
-  outCanvas.width = targetWidth;
-  outCanvas.height = targetHeight;
+  // Copy output to a 2D canvas to avoid WebGL context sharing side effects in WebCodecs/DOM.
+  // Reuse the cached module-level canvas, resizing only when the target dimensions change.
+  if (!outCanvas) {
+    outCanvas = document.createElement('canvas');
+  }
+  if (outCanvas.width !== targetWidth || outCanvas.height !== targetHeight) {
+    outCanvas.width = targetWidth;
+    outCanvas.height = targetHeight;
+  }
   const outCtx = outCanvas.getContext('2d')!;
   outCtx.drawImage(canvas, 0, 0);
 

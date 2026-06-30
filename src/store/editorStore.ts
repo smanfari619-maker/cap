@@ -539,7 +539,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const currentSerialized = JSON.stringify(project);
     set({
       project: updatedProject,
-      past: [...past, currentSerialized],
+      past: [...past, currentSerialized].slice(-50), // cap at 50, same as updateTracks
       future: []
     });
     await db.projects.put(updatedProject);

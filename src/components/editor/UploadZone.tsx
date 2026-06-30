@@ -93,10 +93,10 @@ export default function UploadZone() {
   const handleDeleteAsset = async (asset: Asset, e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm(`Delete ${asset.name}? This will remove it from the project library and delete the file from your local storage.`)) {
-      // Delete file from OPFS
-      await deleteFileFromOPFS(asset.opfsPath);
-      // Delete asset record from Dexie
+      // Delete DB record first (transactional) to prevent ghost records on error.
       await db.assets.delete(asset.id);
+      // Then remove the actual file from OPFS (errors are swallowed by deleteFileFromOPFS).
+      await deleteFileFromOPFS(asset.opfsPath);
     }
   };
 

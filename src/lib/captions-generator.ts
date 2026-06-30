@@ -78,7 +78,7 @@ export async function generateAutoCaptions(project: any): Promise<CaptionSegment
     "Notice the smooth transitions and effects applied between scenes.",
     "Let's look at the color correction and 3D LUT adjustment capabilities.",
     "We can also use real-time audio equalization filters for optimal sound.",
-    "Thank you for watching this demonstration of CapCut Studio Pro!"
+    "Thank you for watching this demonstration of Jellycut!"
   ];
 
   if (soundClips.length === 0) {

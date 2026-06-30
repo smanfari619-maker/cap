@@ -181,16 +181,41 @@ export async function exportProjectWebCodecs(
     'hard-light': 'hard-light'
   };
 
+  // Pre-allocate reusable canvases for effect-track compositing and enhanced upscale.
+  // These are re-dimensioned only when the render size changes (never inside the loop).
+  const effectFilterCanvas = document.createElement('canvas');
+  effectFilterCanvas.width = renderWidth;
+  effectFilterCanvas.height = renderHeight;
+
+  const effectVideoCanvas = document.createElement('canvas');
+  effectVideoCanvas.width = renderWidth;
+  effectVideoCanvas.height = renderHeight;
+
+  // Pre-allocate the enhanced-upscale output canvas (only used in 'enhanced' mode).
+  let enhancedCanvas: HTMLCanvasElement | null = null;
+  let enhancedCtx: CanvasRenderingContext2D | null = null;
+  if (upscaleMode === 'enhanced') {
+    enhancedCanvas = document.createElement('canvas');
+    enhancedCanvas.width = width;
+    enhancedCanvas.height = height;
+    enhancedCtx = enhancedCanvas.getContext('2d')!;
+    enhancedCtx.imageSmoothingEnabled = true;
+    enhancedCtx.imageSmoothingQuality = 'high';
+  }
+
+  // Helper: close encoders + revoke all blob URLs on any exit (cancel OR error).
+  const cleanupOnExit = () => {
+    try { if (videoEncoder.state !== 'closed') videoEncoder.close(); } catch { /* ignore */ }
+    try { if (audioEncoder && audioEncoder.state !== 'closed') audioEncoder.close(); } catch { /* ignore */ }
+    videoElements.forEach((video) => { URL.revokeObjectURL(video.src); video.remove(); });
+    imageElements.forEach((img) => { URL.revokeObjectURL(img.src); });
+  };
+
   // 6. Draw and Encode video frame by frame
+  try {
   for (let f = 0; f < totalFrames; f++) {
     if (isCancelled()) {
-      videoElements.forEach((video) => {
-        URL.revokeObjectURL(video.src);
-        video.remove();
-      });
-      imageElements.forEach((img) => {
-        URL.revokeObjectURL(img.src);
-      });
+      cleanupOnExit();
       throw new Error('Export cancelled');
     }
     if (encodeError) throw encodeError;
@@ -684,16 +709,14 @@ export async function exportProjectWebCodecs(
             }
 
             if (filterStr) {
-              const offscreen = document.createElement('canvas');
-              offscreen.width = renderWidth;
-              offscreen.height = renderHeight;
-              const offCtx = offscreen.getContext('2d');
+              // Reuse pre-allocated effectFilterCanvas — no allocation inside the frame loop.
+              const offCtx = effectFilterCanvas.getContext('2d');
               if (offCtx) {
                 offCtx.drawImage(canvas, 0, 0);
                 ctx.clearRect(0, 0, renderWidth, renderHeight);
                 ctx.save();
                 ctx.filter = filterStr;
-                ctx.drawImage(offscreen, 0, 0);
+                ctx.drawImage(effectFilterCanvas, 0, 0);
                 ctx.restore();
               }
             }
@@ -702,10 +725,8 @@ export async function exportProjectWebCodecs(
           // 2. Apply video effects
           if (clip.videoEffects && clip.videoEffects.length > 0) {
             clip.videoEffects.forEach(eff => {
-              const offscreen = document.createElement('canvas');
-              offscreen.width = renderWidth;
-              offscreen.height = renderHeight;
-              const offCtx = offscreen.getContext('2d');
+              // Reuse pre-allocated effectVideoCanvas — no allocation inside the frame loop.
+              const offCtx = effectVideoCanvas.getContext('2d');
               if (offCtx) {
                 offCtx.drawImage(canvas, 0, 0);
                 ctx.clearRect(0, 0, renderWidth, renderHeight);
@@ -714,10 +735,10 @@ export async function exportProjectWebCodecs(
                 if (filterStr) {
                   ctx.save();
                   ctx.filter = filterStr;
-                  ctx.drawImage(offscreen, 0, 0);
+                  ctx.drawImage(effectVideoCanvas, 0, 0);
                   ctx.restore();
                 } else {
-                  ctx.drawImage(offscreen, 0, 0);
+                  ctx.drawImage(effectVideoCanvas, 0, 0);
                 }
                 
                 applyCanvasEffect(
@@ -746,16 +767,8 @@ export async function exportProjectWebCodecs(
         console.warn('[Upscaler] Frame upscale failed, using original:', err);
         frameSource = canvas;
       }
-    } else if (upscaleMode === 'enhanced') {
-      // Create a fast, instant browser-upscaled canvas with visual enhancements
-      const enhancedCanvas = document.createElement('canvas');
-      enhancedCanvas.width = width;
-      enhancedCanvas.height = height;
-      const enhancedCtx = enhancedCanvas.getContext('2d')!;
-      enhancedCtx.imageSmoothingEnabled = true;
-      enhancedCtx.imageSmoothingQuality = 'high';
-      
-      // Apply hardware-accelerated CSS filters for visual crispness
+    } else if (upscaleMode === 'enhanced' && enhancedCanvas && enhancedCtx) {
+      // Reuse pre-allocated canvas — just redraw the current frame into it.
       enhancedCtx.filter = 'contrast(1.04) saturate(1.03)';
       enhancedCtx.drawImage(canvas, 0, 0, width, height);
       enhancedCtx.filter = 'none';
@@ -779,6 +792,11 @@ export async function exportProjectWebCodecs(
     if (f % 10 === 0) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
+  }
+  } finally {
+    // Always close encoders to release GPU/system codec resources,
+    // regardless of whether the export succeeded, failed, or was cancelled.
+    cleanupOnExit();
   }
 
   // Flush video encoder

@@ -84,7 +84,7 @@ export default function ClipInspector({ width }: { width: number }) {
 
             <div className="font-medium text-gray-500">Path:</div>
             <div className="col-span-2 text-gray-250 break-all font-mono leading-relaxed">
-              /Users/salman/Movies/CapCut/Projects/{project.title.toLowerCase().replace(/\s+/g, '_')}
+              /Users/salman/Movies/Jellycut/Projects/{project.title.toLowerCase().replace(/\s+/g, '_')}
             </div>
 
             <div className="font-medium text-gray-500">Aspect ratio:</div>
@@ -889,7 +889,7 @@ export default function ClipInspector({ width }: { width: number }) {
                           } catch (err: any) {
                              console.error('[Watermark Removal Error]', err);
                              setWmStatus('error');
-                             setWmError(err?.message ?? String(err) ?? 'Unknown error occurred.');
+                             setWmError(err?.message ?? String(err));
                            }
                         }}
                         className="flex-1 py-1.5 rounded-lg text-[9px] font-bold bg-violet-700 hover:bg-violet-600 text-white transition flex items-center justify-center gap-1.5"

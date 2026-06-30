@@ -87,7 +87,7 @@ export default function Timeline({ height }: { height: number }) {
       let recorder: MediaRecorder;
       try {
         recorder = new MediaRecorder(stream, options);
-      } catch (e) {
+      } catch {
         recorder = new MediaRecorder(stream);
       }
       
@@ -231,8 +231,22 @@ export default function Timeline({ height }: { height: number }) {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const pxPerMs = zoom / 1000;
-  // Stable minimum width: covers 10 minutes of content or 3000px, whichever is larger
-  const timelineMinWidth = useMemo(() => Math.max(3000, 600000 * (zoom / 1000)), [zoom]);
+
+  // Calculate dynamic timeline duration based on actual clips (minimum 1 minute, with 30s padding)
+  const timelineDurationMs = useMemo(() => {
+    if (!project) return 60000;
+    let maxClipEnd = 0;
+    project.tracks.forEach(track => {
+      track.clips.forEach(clip => {
+        const end = clip.positionMs + clip.durationMs;
+        if (end > maxClipEnd) maxClipEnd = end;
+      });
+    });
+    return Math.max(60000, maxClipEnd + 30000);
+  }, [project]);
+
+  // Stable minimum width dynamically scales with the timeline's active content duration
+  const timelineMinWidth = useMemo(() => Math.max(3000, timelineDurationMs * pxPerMs), [pxPerMs, timelineDurationMs]);
 
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null);
   const [toolMode, setToolMode] = useState<'select' | 'razor'>('select');
@@ -1925,8 +1939,8 @@ export default function Timeline({ height }: { height: number }) {
     const intervalSec = zoom < 20 ? 5 : 1;
     const subInterval = intervalSec === 1 ? 0.5 : 1;
 
-    // Sub-ticks
-    for (let timeMs = 0; timeMs < 600000; timeMs += subInterval * 1000) {
+    // Sub-ticks (scaled dynamically to timelineDurationMs to avoid rendering thousands of off-screen nodes)
+    for (let timeMs = 0; timeMs < timelineDurationMs; timeMs += subInterval * 1000) {
       const left = timeMs * pxPerMs;
       const isMajor = timeMs % (intervalSec * 1000) === 0;
       if (isMajor) continue;
@@ -1939,8 +1953,8 @@ export default function Timeline({ height }: { height: number }) {
       );
     }
 
-    // Major ticks with labels
-    for (let timeMs = 0; timeMs < 600000; timeMs += intervalSec * 1000) {
+    // Major ticks with labels (scaled dynamically to timelineDurationMs)
+    for (let timeMs = 0; timeMs < timelineDurationMs; timeMs += intervalSec * 1000) {
       const left = timeMs * pxPerMs;
       const sec = Math.floor(timeMs / 1000) % 60;
       const min = Math.floor(timeMs / 60000);
@@ -2331,7 +2345,7 @@ export default function Timeline({ height }: { height: number }) {
                       clipBg = 'bg-[#071e22] border-[#1aa3b8] text-teal-200';
                     } else if (clip.type === 'image') {
                       clipBg = 'bg-[#071e22] border-[#1aa3b8] text-teal-200';
-                    } else if (clip.type === 'effect' || (clip.type as string) === 'effect') {
+                    } else if (clip.type === 'effect') {
                       clipBg = 'bg-[#25103c] border-[#7c3aed] text-purple-200';
                     }
 
@@ -2489,12 +2503,12 @@ export default function Timeline({ height }: { height: number }) {
 
                         {/* Clip Name & Duration — top label floats over filmstrip */}
                         <div className="absolute inset-0 z-10 flex items-center gap-1.5 px-1.5 text-[9.5px] font-semibold text-white max-w-full pointer-events-none select-none overflow-hidden drop-shadow-[0_1px_3px_rgba(0,0,0,1)]">
-                          {(clip.type === 'effect' || (clip.type as string) === 'effect') && (
+                          {clip.type === 'effect' && (
                             <Sparkles className="w-3 h-3 text-purple-300 shrink-0 mr-0.5 animate-pulse" />
                           )}
                           <span className={`${clip.type === 'audio' && (track.muted || clip.volume === 0) ? 'text-zinc-500' : 'text-white'} truncate`}>{clip.name}</span>
                           {clip.type !== 'text' && (
-                            <span className={`${clip.type === 'audio' && (track.muted || clip.volume === 0) ? 'text-zinc-650 font-bold' : (clip.type === 'effect' || (clip.type as string) === 'effect') ? 'text-purple-300' : 'text-[#5ddcf0]'} font-mono text-[8px] shrink-0 ml-1`}>
+                            <span className={`${clip.type === 'audio' && (track.muted || clip.volume === 0) ? 'text-zinc-650 font-bold' : clip.type === 'effect' ? 'text-purple-300' : 'text-[#5ddcf0]'} font-mono text-[8px] shrink-0 ml-1`}>
                               {formatClipDuration(clip.durationMs)}
                             </span>
                           )}

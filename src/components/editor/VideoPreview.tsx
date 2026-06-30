@@ -29,6 +29,8 @@ export default function VideoPreview() {
   // map: assetId -> HTMLImageElement
   const imageElementsRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const filterCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const effectCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const lutCacheRef = useRef<Map<string, Lut3D>>(new Map());
   const [assetsLoaded, setAssetsLoaded] = useState(false);
   const [totalDuration, setTotalDuration] = useState(0);
@@ -145,7 +147,9 @@ export default function VideoPreview() {
               nodes.lowFilter.disconnect();
               nodes.midFilter.disconnect();
               nodes.highFilter.disconnect();
-            } catch (err) {}
+            } catch {
+              // Safe cleanup
+            }
             audioNodesRef.current.delete(key);
           }
         }
@@ -238,9 +242,12 @@ export default function VideoPreview() {
 
   // 2. Clean up media elements on unmount
   useEffect(() => {
+    const currentMediaElements = mediaElementsRef.current;
+    const currentAudioNodes = audioNodesRef.current;
+    const currentAudioCtx = audioCtxRef;
+
     return () => {
-      const mediaMap = mediaElementsRef.current;
-      for (const [key, element] of mediaMap.entries()) {
+      for (const [key, element] of currentMediaElements.entries()) {
         element.pause();
         const src = element.src;
         element.src = '';
@@ -249,21 +256,23 @@ export default function VideoPreview() {
         }
 
         // Clean up audio nodes
-        const nodes = audioNodesRef.current.get(key);
+        const nodes = currentAudioNodes.get(key);
         if (nodes) {
           try {
             nodes.source.disconnect();
             nodes.lowFilter.disconnect();
             nodes.midFilter.disconnect();
             nodes.highFilter.disconnect();
-          } catch (err) {}
+          } catch {
+            // Safe cleanup
+          }
         }
       }
-      mediaMap.clear();
-      audioNodesRef.current.clear();
-      if (audioCtxRef.current) {
-        audioCtxRef.current.close();
-        audioCtxRef.current = null;
+      currentMediaElements.clear();
+      currentAudioNodes.clear();
+      if (currentAudioCtx.current) {
+        currentAudioCtx.current.close();
+        currentAudioCtx.current = null;
       }
     };
   }, []);
@@ -410,6 +419,7 @@ export default function VideoPreview() {
       const project = state.project;
       const currentTime = state.currentTime;
       const upscaleEnabled = state.upscaleEnabled;
+      const isPlaying = state.isPlaying;
       
       if (!project) return;
       const ctx = canvas.getContext('2d');
@@ -964,9 +974,14 @@ export default function VideoPreview() {
               }
 
               if (filterStr) {
-                const offscreen = document.createElement('canvas');
-                offscreen.width = canvas.width;
-                offscreen.height = canvas.height;
+                if (!filterCanvasRef.current) {
+                  filterCanvasRef.current = document.createElement('canvas');
+                }
+                const offscreen = filterCanvasRef.current;
+                if (offscreen.width !== canvas.width || offscreen.height !== canvas.height) {
+                  offscreen.width = canvas.width;
+                  offscreen.height = canvas.height;
+                }
                 const offCtx = offscreen.getContext('2d');
                 if (offCtx) {
                   offCtx.drawImage(canvas, 0, 0);
@@ -982,9 +997,14 @@ export default function VideoPreview() {
             // 2. Apply video effects (if an effect is placed on the effect track)
             if (clip.videoEffects && clip.videoEffects.length > 0) {
               clip.videoEffects.forEach(eff => {
-                const offscreen = document.createElement('canvas');
-                offscreen.width = canvas.width;
-                offscreen.height = canvas.height;
+                if (!effectCanvasRef.current) {
+                  effectCanvasRef.current = document.createElement('canvas');
+                }
+                const offscreen = effectCanvasRef.current;
+                if (offscreen.width !== canvas.width || offscreen.height !== canvas.height) {
+                  offscreen.width = canvas.width;
+                  offscreen.height = canvas.height;
+                }
                 const offCtx = offscreen.getContext('2d');
                 if (offCtx) {
                   offCtx.drawImage(canvas, 0, 0);

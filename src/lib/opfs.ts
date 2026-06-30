@@ -5,8 +5,21 @@
  */
 
 /**
+ * Generate a collision-safe unique ID using the browser's built-in
+ * crypto.randomUUID() (122-bit entropy, RFC 4122 UUID v4).
+ * This replaces Math.random().toString(36) which only has ~35 bits of entropy
+ * and carries a non-trivial collision risk as asset counts grow.
+ */
+export function genId(): string {
+  return crypto.randomUUID();
+}
+
+/**
  * Save a File or Blob into OPFS at a given path.
  * Path should be structured like "projectId/assetId.mp4".
+ *
+ * Write is atomic: if the write fails mid-stream, the partial file is
+ * removed immediately so IndexedDB never ends up pointing to corrupt data.
  */
 export async function saveFileToOPFS(path: string, file: File | Blob): Promise<string> {
   const root = await navigator.storage.getDirectory();
@@ -20,11 +33,20 @@ export async function saveFileToOPFS(path: string, file: File | Blob): Promise<s
 
   const fileName = parts[parts.length - 1];
   const fileHandle = await currentDir.getFileHandle(fileName, { create: true });
-  
-  // Write contents
+
+  // Atomic write: clean up the partial file if the write fails
   const writable = await fileHandle.createWritable();
-  await writable.write(file);
-  await writable.close();
+  try {
+    await writable.write(file);
+    await writable.close();
+  } catch (err) {
+    // Abort the writable stream then remove the incomplete file so we
+    // don't leave a zero-byte or truncated entry that would silently
+    // corrupt future reads.
+    try { await writable.abort(); } catch { /* ignore abort errors */ }
+    try { await currentDir.removeEntry(fileName); } catch { /* ignore cleanup errors */ }
+    throw err; // re-throw so the caller knows the save failed
+  }
 
   return path;
 }

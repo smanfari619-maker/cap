@@ -7,6 +7,7 @@ import VideoPreview from './VideoPreview';
 import ClipInspector from './ClipInspector';
 import Timeline from './Timeline';
 import { exportProjectWebCodecs } from '../../lib/webcodec-exporter';
+import jellycutLogo from '../../assets/jellycut_logo.svg';
 
 const tabs = [
   { id: 'media', label: 'Media', icon: Film },
@@ -482,6 +483,8 @@ export default function EditorLayout() {
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
+
+          <img src={jellycutLogo} className="h-4 w-auto ml-1 mr-2" alt="Jellycut" />
 
           {/* Top Tabs Bar */}
           <div className="flex items-center h-full gap-0.5 ml-2 border-l border-[#2c2c32] pl-2">

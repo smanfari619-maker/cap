@@ -31,16 +31,20 @@ export default function WatermarkDrawModal({
   // Load the OPFS file Blob URL
   useEffect(() => {
     let active = true;
+    let urlToRevoke = '';
     getFileURLFromOPFS(asset.opfsPath).then(url => {
       if (active) {
         setVideoURL(url);
+        urlToRevoke = url;
+      } else {
+        URL.revokeObjectURL(url);
       }
     });
 
     return () => {
       active = false;
-      if (videoURL) {
-        URL.revokeObjectURL(videoURL);
+      if (urlToRevoke) {
+        URL.revokeObjectURL(urlToRevoke);
       }
     };
   }, [asset.opfsPath]);

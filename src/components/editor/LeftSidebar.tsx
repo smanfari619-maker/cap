@@ -250,16 +250,22 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
     return () => window.removeEventListener('click', closeMenu);
   }, []);
 
-  // Keep thumbnailCache in a ref to avoid dependency cycle
+  // Keep thumbnailCache and assets in refs to avoid dependency cycles
   const thumbnailCacheRef = useRef(thumbnailCache);
   useEffect(() => {
     thumbnailCacheRef.current = thumbnailCache;
   }, [thumbnailCache]);
 
+  const assetsRef = useRef(assets);
+  useEffect(() => {
+    assetsRef.current = assets;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assets]);
+
   // Extract thumbnails for video and image assets in LeftSidebar
   const assetIds = assets.map(a => a.id).join(',');
   useEffect(() => {
-    assets.forEach(async (asset) => {
+    assetsRef.current.forEach(async (asset) => {
       if (thumbnailCacheRef.current[asset.id]) return;
       if (asset.type.startsWith('audio/')) return;
       try {
@@ -425,8 +431,12 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
   const handleDeleteAsset = async (asset: Asset, e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm(`Delete ${asset.name}? This will remove it from the project library.`)) {
-      await deleteFileFromOPFS(asset.opfsPath);
+      // Delete DB record first (transactional). If this succeeds and the
+      // OPFS delete below fails, we only lose the file bytes — the ghost record
+      // is already gone so the app stays consistent. The reverse order risks
+      // leaving a DB record pointing to a missing file on every reload.
       await db.assets.delete(asset.id);
+      await deleteFileFromOPFS(asset.opfsPath);
     }
   };
 
