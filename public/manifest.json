@@ -1,6 +1,6 @@
 {
-  "name": "CapCut Web Editor",
-  "short_name": "CapCut Web",
+  "name": "Jellycut Web Editor",
+  "short_name": "Jellycut Web",
   "description": "A powerful web-based video editor with real-time effects, transitions, filters, and voiceover recording.",
   "start_url": "/",
   "display": "standalone",
