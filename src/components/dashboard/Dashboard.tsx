@@ -4,7 +4,7 @@ import {
   Plus, Trash2, Video, Film, Folder, Download, Upload, 
   Smartphone, Tv, Sparkles, Search, HardDrive, Cpu, 
   Keyboard, Clock, ShieldCheck, Settings, HelpCircle, 
-  Bell, User, Scissors, MoreVertical, X, Image as ImageIcon
+  Bell, User, Scissors, MoreVertical, X
 } from 'lucide-react';
 import { db, type Project } from '../../lib/db';
 import { useEditorStore } from '../../store/editorStore';
@@ -38,6 +38,7 @@ export default function Dashboard() {
   const [mobileTab, setMobileTab] = useState<'edit' | 'templates' | 'inbox' | 'me'>('edit');
   const [showMobileWatermarkTool, setShowMobileWatermarkTool] = useState(false);
   const [activeProjectMenuId, setActiveProjectMenuId] = useState<string | null>(null);
+  const [projectToDeleteId, setProjectToDeleteId] = useState<string | null>(null);
 
   // templates config
   const templates = [
@@ -145,15 +146,19 @@ export default function Dashboard() {
 
   const handleDeleteProject = async (projectId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm('Are you sure you want to delete this project? All local media files inside this project will be deleted permanently.')) {
-      // Delete OPFS files first. deleteDirectoryFromOPFS swallows errors silently,
-      // so if it fails the DB records remain intact and the user can retry.
-      // Deleting DB records first would leave orphaned OPFS files with no UI path to clean them.
-      await deleteDirectoryFromOPFS(projectId);
-      const projectAssets = await db.assets.where('projectId').equals(projectId).toArray();
-      await db.assets.bulkDelete(projectAssets.map(a => a.id));
-      await db.projects.delete(projectId);
-    }
+    setProjectToDeleteId(projectId);
+  };
+
+  const confirmDeleteProject = async () => {
+    if (!projectToDeleteId) return;
+    // Delete OPFS files first. deleteDirectoryFromOPFS swallows errors silently,
+    // so if it fails the DB records remain intact and the user can retry.
+    // Deleting DB records first would leave orphaned OPFS files with no UI path to clean them.
+    await deleteDirectoryFromOPFS(projectToDeleteId);
+    const projectAssets = await db.assets.where('projectId').equals(projectToDeleteId).toArray();
+    await db.assets.bulkDelete(projectAssets.map(a => a.id));
+    await db.projects.delete(projectToDeleteId);
+    setProjectToDeleteId(null);
   };
 
   const handleExportBackup = async (project: Project, e: React.MouseEvent) => {
@@ -261,7 +266,7 @@ export default function Dashboard() {
   });
 
   return (
-    <div className="flex-1 overflow-y-auto bg-zinc-950 text-zinc-100 relative">
+    <div className="flex-1 overflow-y-auto overflow-x-hidden bg-zinc-950 text-zinc-100 relative">
       {/* Decorative gradients */}
       <div className="absolute top-0 left-1/4 w-[600px] h-[600px] purple-glow-accent rounded-full blur-[140px] pointer-events-none" />
       <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] blue-glow-accent rounded-full blur-[120px] pointer-events-none" />
@@ -645,7 +650,7 @@ export default function Dashboard() {
       </div>
 
       {/* MOBILE LAYOUT */}
-      <div className="block md:hidden min-h-screen pb-24 px-4 pt-4 relative z-10 animate-fade-in-up">
+      <div className="block md:hidden min-h-screen pb-24 px-4 pt-4 relative z-10 animate-fade-in-up w-full max-w-full overflow-x-hidden">
         {mobileTab === 'edit' && (
           <>
             {/* Mobile Header */}
@@ -663,31 +668,21 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Quick Actions Grid */}
-            <div className="grid grid-cols-5 gap-2 mb-6">
-              {[
-                { title: 'Script to video', icon: Video, bg: 'bg-sky-500/10 text-sky-400' },
-                { title: 'Smart Ads', icon: Smartphone, bg: 'bg-pink-500/10 text-pink-400' },
-                { title: 'Watermark', icon: ShieldCheck, bg: 'bg-emerald-500/10 text-emerald-400', action: () => setShowMobileWatermarkTool(true) },
-                { title: 'Text to image', icon: ImageIcon, bg: 'bg-purple-500/10 text-purple-400' },
-                { title: 'Expand', icon: Film, bg: 'bg-yellow-500/10 text-yellow-400' }
-              ].map((act, idx) => {
-                const IconComponent = act.icon || Sparkles;
-                return (
-                  <div 
-                    key={idx} 
-                    onClick={act.action || (() => {})} 
-                    className="flex flex-col items-center gap-1.5 cursor-pointer group"
-                  >
-                    <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${act.bg} group-hover:scale-105 transition`}>
-                      <IconComponent className="w-5 h-5" />
-                    </div>
-                    <span className="text-[9px] text-zinc-400 text-center font-medium leading-tight line-clamp-2">
-                      {act.title}
-                    </span>
-                  </div>
-                );
-              })}
+            {/* Watermark Remover Quick Tool Card */}
+            <div 
+              onClick={() => setShowMobileWatermarkTool(true)}
+              className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-4 mb-6 flex items-center justify-between cursor-pointer hover:border-violet-500/30 transition group"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center group-hover:scale-105 transition">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-xs text-zinc-200">Gemini Watermark Remover</h4>
+                  <p className="text-[10px] text-zinc-500 mt-0.5">Scan and erase video watermarks automatically</p>
+                </div>
+              </div>
+              <span className="text-zinc-500 group-hover:text-zinc-300 transition text-xs font-semibold mr-1">&gt;</span>
             </div>
 
             {/* New Project Gradient Button */}
@@ -707,7 +702,7 @@ export default function Dashboard() {
                 <h3 className="text-xs font-bold text-zinc-450 uppercase tracking-wider">Explore</h3>
                 <span className="text-[10px] text-zinc-500 cursor-pointer">View all &gt;</span>
               </div>
-              <div className="flex gap-3 overflow-x-auto scrollbar-hide pb-2">
+              <div className="flex gap-3 overflow-x-auto scrollbar-hide pb-2 w-full max-w-full">
                 {templates.map((temp) => {
                   const IconComp = temp.icon;
                   return (
@@ -817,14 +812,7 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Float Banner: Celebrate 2026 */}
-            <div className="mt-8 relative overflow-hidden rounded-2xl bg-gradient-to-r from-red-650 via-pink-650 to-purple-650 p-4 flex justify-between items-center">
-              <div className="z-10">
-                <span className="text-[8px] tracking-widest font-bold uppercase text-white/80 block">Campaign</span>
-                <span className="font-extrabold text-sm text-white mt-0.5 block leading-tight">Celebrate 2026. Edit, Share, Win!</span>
-              </div>
-              <span className="text-3xl font-black text-white/20 select-none absolute right-4 bottom-1 rotate-12">2026</span>
-            </div>
+            {/* Float Banner: Celebrate 2026 removed */}
           </>
         )}
 
@@ -1085,6 +1073,34 @@ export default function Dashboard() {
             </button>
           </div>
           <WatermarkRemoverTool />
+        </div>
+      )}
+
+      {/* Custom Delete Confirmation Modal */}
+      {projectToDeleteId && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-fade-in-up">
+          <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl relative">
+            <h3 className="text-sm font-bold text-zinc-100 mb-2">Delete Project?</h3>
+            <p className="text-xs text-zinc-400 mb-6 leading-relaxed">
+              Are you sure you want to delete this project? All local media files inside this project will be deleted permanently. This action cannot be undone.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                type="button"
+                onClick={() => setProjectToDeleteId(null)}
+                className="px-4 py-2 text-xs font-semibold rounded-lg border border-zinc-800 bg-zinc-950 hover:bg-zinc-900 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteProject}
+                className="px-4 py-2 text-xs font-bold rounded-lg text-white bg-red-650 hover:bg-red-600 transition cursor-pointer shadow-lg shadow-red-950/20 animate-pulse"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
