@@ -78,7 +78,7 @@ export default function EditorLayout() {
   // Resizable panel states
   const [sidebarWidth, setSidebarWidth] = useState(320);
   const [inspectorWidth, setInspectorWidth] = useState(320);
-  const [timelineHeight, setTimelineHeight] = useState(340);
+  const [timelineHeight, setTimelineHeight] = useState(window.innerWidth < 768 ? 200 : 340);
   const [activeDrag, setActiveDrag] = useState<'sidebar' | 'inspector' | 'timeline' | null>(null);
 
   // Resize Handlers
@@ -128,6 +128,23 @@ export default function EditorLayout() {
     };
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  const startTimelineTouchResize = () => {
+    setActiveDrag('timeline');
+    const handleTouchMove = (moveEvent: TouchEvent) => {
+      if (moveEvent.touches.length === 0) return;
+      const clientY = moveEvent.touches[0].clientY;
+      const newHeight = Math.max(120, Math.min(500, window.innerHeight - clientY));
+      setTimelineHeight(newHeight);
+    };
+    const handleTouchEnd = () => {
+      setActiveDrag(null);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+    window.addEventListener('touchmove', handleTouchMove, { passive: true });
+    window.addEventListener('touchend', handleTouchEnd);
   };
 
   const applyLayoutPreset = (preset: 'editing' | 'color' | 'audio' | 'media') => {
@@ -708,94 +725,93 @@ export default function EditorLayout() {
         {!isMobile && <ClipInspector width={inspectorWidth} />}
       </div>
 
-      {/* Timeline Resize Handle (Desktop Only) */}
-      {!isMobile && (
-        <div 
-          className={`h-2 hover:h-2 bg-transparent cursor-row-resize transition-all relative flex items-center justify-center group z-35 ${
-            activeDrag === 'timeline' ? 'bg-sky-500/20' : ''
-          }`}
-          onMouseDown={startTimelineResize}
-        >
-          <div className={`w-full h-[1px] transition-colors ${
-            activeDrag === 'timeline' ? 'bg-sky-400' : 'bg-[#2c2c32] group-hover:bg-sky-500'
-          }`} />
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-0.5 bg-[#3a3a42] rounded group-hover:bg-sky-400 transition-colors" />
-        </div>
-      )}
+      {/* Timeline Resize Handle (Desktop & Mobile) */}
+      <div 
+        className={`h-3 bg-[#121214] border-t border-b border-[#2c2c32] hover:bg-sky-500/20 cursor-row-resize transition-all relative flex items-center justify-center group z-35 shrink-0 ${
+          activeDrag === 'timeline' ? 'bg-sky-500/20' : ''
+        }`}
+        onMouseDown={startTimelineResize}
+        onTouchStart={startTimelineTouchResize}
+      >
+        <div className={`w-full h-[1px] transition-colors ${
+          activeDrag === 'timeline' ? 'bg-sky-400' : 'bg-[#2c2c32] group-hover:bg-sky-500'
+        }`} />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-1 bg-[#3a3a42] rounded-full group-hover:bg-sky-400 transition-colors" />
+      </div>
 
       {/* Bottom Area: Timeline Scrubber */}
-      <div className={isMobile ? "h-[260px] flex flex-col shrink-0" : "flex flex-col min-h-0"}>
-        <Timeline height={isMobile ? 260 : timelineHeight} />
+      <div className="flex flex-col shrink-0" style={{ height: `${timelineHeight}px` }}>
+        <Timeline height={timelineHeight} />
       </div>
 
       {/* Mobile Toolbar (Mobile Only) */}
       {isMobile && (
-        <div className="bg-[#18181c] border-t border-[#2c2c32] py-3.5 px-4 flex justify-between items-center z-40 safe-bottom-padding overflow-x-auto scrollbar-hide shrink-0">
+        <div className="bg-[#18181c] border-t border-[#2c2c32] py-2 px-3 flex justify-between items-center z-40 safe-bottom-padding overflow-x-auto scrollbar-hide shrink-0">
           {selectedClipId ? (
             /* Clip Specific actions when clip is selected */
             <div className="flex justify-between items-center w-full min-w-max gap-8 px-1">
               <button 
                 onClick={() => { setSelectedClipId(null); setSelectedClipIds([]); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <X className="w-5 h-5 text-zinc-450" />
-                <span className="text-[9px] font-bold">Deselect</span>
+                <X className="w-4 h-4 text-zinc-450" />
+                <span className="text-[8px] font-bold">Deselect</span>
               </button>
               <button 
                 onClick={() => splitClipAtPlayhead()}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Scissors className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Split</span>
+                <Scissors className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Split</span>
               </button>
               <button 
                 onClick={() => setActiveMobileSlider(activeMobileSlider === 'speed' ? null : 'speed')}
-                className={`flex flex-col items-center gap-1.5 transition cursor-pointer ${activeMobileSlider === 'speed' ? 'text-sky-400' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`flex flex-col items-center gap-1 transition cursor-pointer ${activeMobileSlider === 'speed' ? 'text-sky-400' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
-                <Timer className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Speed</span>
+                <Timer className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Speed</span>
               </button>
               <button 
                 onClick={() => setActiveMobileSlider(activeMobileSlider === 'volume' ? null : 'volume')}
-                className={`flex flex-col items-center gap-1.5 transition cursor-pointer ${activeMobileSlider === 'volume' ? 'text-sky-400' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`flex flex-col items-center gap-1 transition cursor-pointer ${activeMobileSlider === 'volume' ? 'text-sky-400' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
-                <Volume2 className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Volume</span>
+                <Volume2 className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Volume</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('properties'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Sliders className="w-5 h-5 text-sky-450" />
-                <span className="text-[9px] font-bold">Properties</span>
+                <Sliders className="w-4 h-4 text-sky-455" />
+                <span className="text-[8px] font-bold">Properties</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('effects'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Sparkles className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Effects</span>
+                <Sparkles className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Effects</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('filters'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Palette className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Filters</span>
+                <Palette className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Filters</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('transitions'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Zap className="w-5 h-5 text-amber-400" />
-                <span className="text-[9px] font-bold">Transitions</span>
+                <Zap className="w-4 h-4 text-amber-400" />
+                <span className="text-[8px] font-bold">Transitions</span>
               </button>
               <button 
-                onClick={() => { if (confirm("Delete selected clip?")) { removeClip(selectedClipId); setSelectedClipId(null); } }}
-                className="flex flex-col items-center gap-1.5 text-red-400 hover:text-red-300 transition cursor-pointer"
+                onClick={() => { removeClip(selectedClipId); setSelectedClipId(null); }}
+                className="flex flex-col items-center gap-1 text-red-400 hover:text-red-300 transition cursor-pointer"
               >
-                <Trash2 className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Delete</span>
+                <Trash2 className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Delete</span>
               </button>
             </div>
           ) : (
@@ -803,73 +819,73 @@ export default function EditorLayout() {
             <div className="flex justify-between items-center w-full min-w-max gap-8 px-1">
               <button 
                 onClick={() => setShowMobileMediaPicker(true)}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Film className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Media</span>
+                <Film className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Media</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('audio'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Music className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Audio</span>
+                <Music className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Audio</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('text'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Type className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Text</span>
+                <Type className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Text</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('stickers'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Smile className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Stickers</span>
+                <Smile className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Stickers</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('effects'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Sparkles className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Effects</span>
+                <Sparkles className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Effects</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('transitions'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Zap className="w-5 h-5 text-amber-400" />
-                <span className="text-[9px] font-bold">Transitions</span>
+                <Zap className="w-4 h-4 text-amber-400" />
+                <span className="text-[8px] font-bold">Transitions</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('captions'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Languages className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Captions</span>
+                <Languages className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Captions</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('filters'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Palette className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Filters</span>
+                <Palette className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Filters</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('adjustment'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Sliders className="w-5 h-5" />
-                <span className="text-[9px] font-bold">Adjust</span>
+                <Sliders className="w-4 h-4" />
+                <span className="text-[8px] font-bold">Adjust</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('ai-avatars'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Users className="w-5 h-5" />
-                <span className="text-[9px] font-bold">AI Avatars</span>
+                <Users className="w-4 h-4" />
+                <span className="text-[8px] font-bold">AI Avatars</span>
               </button>
             </div>
           )}

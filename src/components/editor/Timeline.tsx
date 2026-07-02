@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { Type, Scissors, Trash2, ZoomIn, ZoomOut, Smile, Undo2, Redo2, Magnet, Link2, Rows, Settings, Image as ImageIcon, MousePointer, Crop, Snowflake, RotateCw, Mic, RefreshCw, Copy, Clipboard, FileCog, FolderOpen, Power, Wand2, FileVideo, ChevronRight, Sparkles, Volume2, VolumeX } from 'lucide-react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { useEditorStore } from '../../store/editorStore';
 import { db, type TimelineClip, type TimelineTrack, type Keyframe } from '../../lib/db';
 import { EFFECTS_REGISTRY } from '../../lib/effects-registry';
@@ -42,6 +43,14 @@ const getTrackHeight = (type: 'video' | 'audio' | 'image' | 'text' | 'effect') =
 
 export default function Timeline({ height }: { height: number }) {
   const project = useEditorStore(state => state.project);
+  const hasAssets = useLiveQuery(
+    async () => {
+      if (!project?.id) return false;
+      const count = await db.assets.where('projectId').equals(project.id).count();
+      return count > 0;
+    },
+    [project?.id]
+  ) || false;
   const setCurrentTime = useEditorStore(state => state.setCurrentTime);
   const selectedClipId = useEditorStore(state => state.selectedClipId);
   const [isLinkedSelection, setIsLinkedSelection] = useState(true);
@@ -2050,14 +2059,14 @@ export default function Timeline({ height }: { height: number }) {
       style={{ height }}
     >
       {/* Timeline Toolbar */}
-      <div className="flex items-center justify-between px-2 py-1 border-b border-[#1f1f23] bg-[#0a0a0d] text-zinc-400 select-none">
+      <div className="flex items-center justify-between px-2 py-1 border-b border-[#1f1f23] bg-[#0a0a0d] text-zinc-400 select-none overflow-x-auto scrollbar-hide w-full max-w-full">
         {/* Left Toolbar Controls */}
-        <div className="flex items-center gap-0.5">
+        <div className="flex items-center gap-1.5 md:gap-0.5 min-w-max">
           {/* Select Tool */}
           <button
             onClick={() => setToolMode('select')}
             title="Select (V)"
-            className={`p-1 rounded border transition ${
+            className={`hidden md:flex p-1 rounded border transition cursor-pointer ${
               toolMode === 'select' ? 'bg-zinc-800 text-sky-400 border-sky-900/50' : 'bg-transparent text-zinc-500 border-transparent hover:text-zinc-300'
             }`}
           >
@@ -2068,50 +2077,50 @@ export default function Timeline({ height }: { height: number }) {
           <button
             onClick={() => setToolMode('razor')}
             title="Razor (C)"
-            className={`p-1 rounded border transition ${
+            className={`hidden md:flex p-1 rounded border transition cursor-pointer ${
               toolMode === 'razor' ? 'bg-zinc-800 text-red-400 border-red-900/50' : 'bg-transparent text-zinc-500 border-transparent hover:text-zinc-300'
             }`}
           >
             <Scissors className="w-3.5 h-3.5" />
           </button>
 
-          <span className="h-3 w-px bg-zinc-700/60 mx-1" />
+          <span className="hidden md:inline h-3 w-px bg-zinc-700/60 mx-1" />
 
           {/* Undo / Redo */}
-          <button onClick={undo} disabled={past.length === 0} title="Undo (Ctrl+Z)" className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 disabled:opacity-25 disabled:hover:bg-transparent transition">
-            <Undo2 className="w-3.5 h-3.5" />
+          <button onClick={undo} disabled={past.length === 0} title="Undo (Ctrl+Z)" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 disabled:opacity-25 disabled:hover:bg-transparent transition cursor-pointer">
+            <Undo2 className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
-          <button onClick={redo} disabled={future.length === 0} title="Redo (Ctrl+Y)" className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 disabled:opacity-25 disabled:hover:bg-transparent transition">
-            <Redo2 className="w-3.5 h-3.5" />
+          <button onClick={redo} disabled={future.length === 0} title="Redo (Ctrl+Y)" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 disabled:opacity-25 disabled:hover:bg-transparent transition cursor-pointer">
+            <Redo2 className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           <span className="h-3 w-px bg-zinc-700/60 mx-1" />
 
           {/* Split */}
-          <button onClick={splitClipAtPlayhead} title="Split (S)" className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition">
-            <Scissors className="w-3.5 h-3.5" />
+          <button onClick={splitClipAtPlayhead} title="Split (S)" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer">
+            <Scissors className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           {/* Delete */}
-          <button onClick={() => selectedClipId && removeClip(selectedClipId)} disabled={!selectedClipId} title="Delete (Del)" className="p-1 rounded hover:bg-red-950/30 text-zinc-500 hover:text-red-400 disabled:opacity-25 disabled:hover:bg-transparent transition">
-            <Trash2 className="w-3.5 h-3.5" />
+          <button onClick={() => selectedClipId && removeClip(selectedClipId)} disabled={!selectedClipId} title="Delete (Del)" className="p-1.5 md:p-1 rounded hover:bg-red-950/30 text-zinc-500 hover:text-red-400 disabled:opacity-25 disabled:hover:bg-transparent transition cursor-pointer">
+            <Trash2 className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           <span className="h-3 w-px bg-zinc-700/60 mx-1" />
 
           {/* Crop */}
-          <button onClick={() => { if (selectedClipId) { alert("Use the inspector on the right!"); } }} title="Crop" className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition">
-            <Crop className="w-3.5 h-3.5" />
+          <button onClick={() => { if (selectedClipId) { alert("Use the inspector on the right!"); } }} title="Crop" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer">
+            <Crop className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           {/* Freeze Frame */}
-          <button onClick={() => { if (!selectedClipId) { alert("Select a clip first!"); return; } alert("Freeze Frame!"); }} title="Freeze Frame" className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition">
-            <Snowflake className="w-3.5 h-3.5" />
+          <button onClick={() => { if (!selectedClipId) { alert("Select a clip first!"); return; } alert("Freeze Frame!"); }} title="Freeze Frame" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer">
+            <Snowflake className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           {/* Reverse */}
-          <button onClick={() => { if (!selectedClipId) { alert("Select a clip!"); return; } alert("Reverse!"); }} title="Reverse" className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition">
-            <RefreshCw className="w-3.5 h-3.5" />
+          <button onClick={() => { if (!selectedClipId) { alert("Select a clip!"); return; } alert("Reverse!"); }} title="Reverse" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer">
+            <RefreshCw className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           {/* Rotate */}
@@ -2134,16 +2143,16 @@ export default function Timeline({ height }: { height: number }) {
               });
             }}
             title="Rotate 90°"
-            className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition"
+            className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer"
           >
-            <RotateCw className="w-3.5 h-3.5" />
+            <RotateCw className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           <span className="h-3 w-px bg-zinc-700/60 mx-1" />
 
           {/* Text */}
-          <button onClick={handleAddTextClip} title="Add Text" className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-sky-400 transition">
-            <Type className="w-3.5 h-3.5" />
+          <button onClick={handleAddTextClip} title="Add Text" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-sky-400 transition cursor-pointer">
+            <Type className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           {/* Stickers */}
@@ -2151,11 +2160,11 @@ export default function Timeline({ height }: { height: number }) {
             <button
               onClick={() => setShowStickers(!showStickers)}
               title="Stickers"
-              className={`p-1 rounded transition ${
+              className={`p-1.5 md:p-1 rounded transition cursor-pointer ${
                 showStickers ? 'bg-zinc-800 text-amber-400' : 'text-zinc-500 hover:text-amber-400'
               }`}
             >
-              <Smile className="w-3.5 h-3.5" />
+              <Smile className="w-4 h-4 md:w-3.5 md:h-3.5" />
             </button>
             {showStickers && (
               <div className="absolute bottom-7 left-0 z-50 grid grid-cols-4 gap-1 p-1.5 bg-[#18181c] border border-[#2c2c32] rounded shadow-2xl w-40 backdrop-blur-md">
@@ -2163,7 +2172,7 @@ export default function Timeline({ height }: { height: number }) {
                   <button
                     key={e}
                     onClick={() => handleAddEmojiClip(e)}
-                    className="flex items-center justify-center text-lg hover:scale-125 transition p-0.5 hover:bg-[#2a2a30] rounded"
+                    className="flex items-center justify-center text-lg hover:scale-125 transition p-0.5 hover:bg-[#2a2a30] rounded cursor-pointer"
                   >
                     {e}
                   </button>
@@ -2174,40 +2183,40 @@ export default function Timeline({ height }: { height: number }) {
         </div>
 
         {/* Right Toolbar Controls */}
-        <div className="flex items-center gap-0.5">
+        <div className="flex items-center gap-1.5 md:gap-0.5 min-w-max ml-4 md:ml-0">
           {/* Record Voiceover */}
-          <button onClick={() => setShowMicModal(true)} title="Record Voiceover" className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-red-400 transition">
-            <Mic className="w-3.5 h-3.5" />
+          <button onClick={() => setShowMicModal(true)} title="Record Voiceover" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-red-400 transition cursor-pointer">
+            <Mic className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           <span className="h-3 w-px bg-zinc-700/60 mx-1" />
 
           {/* Snap Toggle */}
           <button onClick={() => setSnapEnabled(!snapEnabled)} title={snapEnabled ? 'Disable Snapping' : 'Enable Snapping'}
-            className={`p-1 rounded border transition ${
+            className={`p-1.5 md:p-1 rounded border transition cursor-pointer ${
               snapEnabled ? 'bg-zinc-800 text-sky-400 border-sky-900/50' : 'bg-transparent text-zinc-500 border-transparent hover:text-zinc-300'
             }`}>
-            <Magnet className="w-3.5 h-3.5" />
+            <Magnet className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           {/* Linked Selection Toggle */}
           <button onClick={() => setIsLinkedSelection(!isLinkedSelection)} title={isLinkedSelection ? 'Disable Linked Selection' : 'Enable Linked Selection'}
-            className={`p-1 rounded border transition ${
+            className={`p-1.5 md:p-1 rounded border transition cursor-pointer ${
               isLinkedSelection ? 'bg-zinc-800 text-sky-400 border-sky-900/50' : 'bg-transparent text-zinc-500 border-transparent hover:text-zinc-300'
             }`}>
-            <Link2 className="w-3.5 h-3.5" />
+            <Link2 className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           {/* Ripple Edit Toggle */}
           <button onClick={() => setRippleEnabled(!rippleEnabled)} title={rippleEnabled ? 'Disable Ripple Edit' : 'Enable Ripple Edit'}
-            className={`p-1 rounded border transition ${
+            className={`p-1.5 md:p-1 rounded border transition cursor-pointer ${
               rippleEnabled ? 'bg-zinc-800 text-sky-400 border-sky-900/50' : 'bg-transparent text-zinc-500 border-transparent hover:text-zinc-300'
             }`}>
-            <Rows className="w-3.5 h-3.5" />
+            <Rows className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           {/* Shortcuts Help */}
-          <button onClick={() => setShowKeyboardHelp(true)} title="Keyboard Shortcuts" className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition">
+          <button onClick={() => setShowKeyboardHelp(true)} title="Keyboard Shortcuts" className="hidden md:flex p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition cursor-pointer">
             <Settings className="w-3.5 h-3.5" />
           </button>
 
@@ -2215,7 +2224,7 @@ export default function Timeline({ height }: { height: number }) {
           <button
             onClick={() => setShowGraphEditor(!showGraphEditor)}
             title="Keyframe Graph Editor"
-            className={`p-1 rounded border transition flex items-center gap-0.5 ${
+            className={`p-1.5 md:p-1 rounded border transition flex items-center gap-0.5 cursor-pointer ${
               showGraphEditor ? 'bg-zinc-800 text-purple-400 border-purple-900/50' : 'bg-transparent text-zinc-500 border-transparent hover:text-zinc-300'
             }`}
           >
@@ -2327,7 +2336,7 @@ export default function Timeline({ height }: { height: number }) {
           />
 
           {/* Empty State */}
-          {project.tracks.every(t => t.clips.length === 0) && (
+          {!hasAssets && project.tracks.every(t => t.clips.length === 0) && (
             <div 
               onDragOver={handleAreaDragOver}
               onDrop={handleAreaDrop}

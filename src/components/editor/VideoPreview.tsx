@@ -1352,9 +1352,9 @@ export default function VideoPreview() {
       </div>
 
       {/* Controller Controls Bar */}
-      <div className="border-t border-[#2c2c32] bg-[#18181c] p-2.5 flex flex-col gap-2">
-        {/* Scrubber Slider */}
-        <div className="flex items-center gap-2 w-full px-1">
+      <div className="border-t border-[#2c2c32] bg-[#18181c] p-2 flex flex-col gap-1.5 shrink-0">
+        {/* Scrubber Slider & Mobile Timecode Row */}
+        <div className="flex items-center justify-between gap-3 w-full px-1.5">
           <input
             type="range"
             min={0}
@@ -1363,12 +1363,18 @@ export default function VideoPreview() {
             onChange={(e) => setCurrentTime(Number(e.target.value))}
             className="flex-1 h-1 bg-[#121214] rounded-lg appearance-none cursor-pointer accent-sky-500 focus:outline-none"
           />
+          {/* Mobile Only Inline Timecode */}
+          <div className="md:hidden text-[9px] font-mono text-zinc-400 shrink-0 select-none">
+            <span>{formatTimecode(currentTime)}</span>
+            <span className="text-zinc-650 mx-0.5">/</span>
+            <span className="text-zinc-550">{formatTimecode(totalDuration)}</span>
+          </div>
         </div>
 
         {/* Buttons & Timecode Bar */}
-        <div className="flex items-center justify-between w-full px-1">
-          {/* Left: Timecode */}
-          <div className="text-xs font-mono text-gray-400 flex items-center gap-1">
+        <div className="flex items-center justify-between w-full px-1.5 relative min-h-7">
+          {/* Left: Desktop Only Timecode (hidden on mobile) */}
+          <div className="hidden md:flex text-xs font-mono text-gray-400 items-center gap-1 select-none">
             {isEditingTimecode ? (
               <input
                 type="text"
@@ -1411,36 +1417,36 @@ export default function VideoPreview() {
             <span className="text-gray-500">{formatTimecode(totalDuration)}</span>
           </div>
 
-          {/* Center: Playback Buttons */}
-          <div className="flex items-center gap-2.5">
+          {/* Center: Playback Buttons (compact, left-aligned on mobile, absolute centered on desktop) */}
+          <div className="flex items-center gap-3.5 justify-start md:justify-center md:absolute md:left-1/2 md:-translate-x-1/2">
             <button
               onClick={() => stepFrame(-1)}
               title="Previous Frame (Key: ,)"
-              className="p-1 rounded hover:bg-[#2a2a30] text-gray-400 hover:text-gray-200 transition"
+              className="p-1 rounded hover:bg-[#2a2a30] text-gray-400 hover:text-gray-200 transition cursor-pointer"
             >
-              <SkipBack className="w-4 h-4" />
+              <SkipBack className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={togglePlay}
               disabled={!assetsLoaded}
-              className="p-2.5 rounded-full bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white transition shadow shadow-sky-600/10 hover:scale-105"
+              className="p-2 rounded-full bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white transition shadow shadow-sky-600/10 hover:scale-105 cursor-pointer"
             >
-              {isPlaying ? <Pause className="w-4.5 h-4.5 fill-current" /> : <Play className="w-4.5 h-4.5 fill-current" />}
+              {isPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
             </button>
             <button
               onClick={() => stepFrame(1)}
               title="Next Frame (Key: .)"
-              className="p-1 rounded hover:bg-[#2a2a30] text-gray-400 hover:text-gray-200 transition"
+              className="p-1 rounded hover:bg-[#2a2a30] text-gray-400 hover:text-gray-200 transition cursor-pointer"
             >
-              <SkipForward className="w-4 h-4" />
+              <SkipForward className="w-3.5 h-3.5" />
             </button>
           </div>
 
           {/* Right: Ratio, Safe Zone, Fullscreen, WebGPU */}
-          <div className="flex items-center gap-2 relative">
+          <div className="flex items-center gap-1.5 relative justify-end">
             {/* WebGPU Indicator */}
             {upscaleEnabled && (
-              <span className="flex items-center gap-1 text-[8px] px-1.5 py-0.5 rounded bg-sky-950/40 text-sky-400 border border-sky-900/50 select-none animate-pulse">
+              <span className="hidden sm:inline-flex items-center gap-1 text-[8px] px-1.5 py-0.5 rounded bg-sky-950/40 text-sky-400 border border-sky-900/50 select-none animate-pulse">
                 WebGPU
               </span>
             )}
@@ -1449,14 +1455,14 @@ export default function VideoPreview() {
             <div className="relative">
               <button
                 onClick={() => setShowRatioDropdown(!showRatioDropdown)}
-                className="flex items-center gap-1 px-2.5 py-1 bg-[#121214] border border-[#2c2c32] hover:border-sky-500 rounded text-[10px] text-gray-300 font-semibold transition"
+                className="flex items-center gap-0.5 px-2 py-0.5 bg-[#121214] border border-[#2c2c32] hover:border-sky-500 rounded text-[9px] text-gray-300 font-semibold transition cursor-pointer"
               >
                 <span>Ratio: {getAspectName()}</span>
-                <ChevronDown className="w-3 h-3 text-gray-500" />
+                <ChevronDown className="w-2.5 h-2.5 text-gray-500" />
               </button>
 
               {showRatioDropdown && (
-                <div className="absolute bottom-8 right-0 z-50 flex flex-col bg-[#1e1e22] border border-[#2c2c32] rounded shadow-2xl py-1.5 w-44 max-h-80 overflow-y-auto custom-scrollbar">
+                <div className="absolute bottom-7 right-0 z-50 flex flex-col bg-[#1e1e22] border border-[#2c2c32] rounded shadow-2xl py-1.5 w-36 max-h-60 overflow-y-auto custom-scrollbar">
                   {ratioOptions.map((opt, idx) => {
                     if (opt.type === 'separator') {
                       return <div key={`sep-${idx}`} className="h-[1px] bg-[#2c2c32] my-1 mx-2" />;
@@ -1469,19 +1475,14 @@ export default function VideoPreview() {
                       <button
                         key={opt.id}
                         onClick={() => handleSetAspectRatio(opt.id!)}
-                        className="flex items-center justify-between px-3 py-1.5 text-[10px] text-left text-gray-350 hover:bg-[#2a2a30] hover:text-sky-400 transition font-medium"
+                        className="flex items-center justify-between px-2.5 py-1 text-[9px] text-left text-gray-350 hover:bg-[#2a2a30] hover:text-sky-400 transition font-medium cursor-pointer"
                       >
-                        <div className="flex items-center gap-2">
-                          <span className="w-3.5 flex items-center justify-center">
-                            {isActive && <Check className="w-3 h-3 text-sky-400" />}
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-3 flex items-center justify-center">
+                            {isActive && <Check className="w-2.5 h-2.5 text-sky-400" />}
                           </span>
                           <span>{opt.label}</span>
                         </div>
-                        {opt.iconStyle && (
-                          <div className="w-6 flex items-center justify-center">
-                            <div className={`border border-gray-500/80 rounded-sm bg-transparent ${opt.iconStyle}`} />
-                          </div>
-                        )}
                       </button>
                     );
                   })}
@@ -1493,22 +1494,22 @@ export default function VideoPreview() {
             <button
               onClick={() => setShowSafeZone(!showSafeZone)}
               title="Toggle Safe Zone"
-              className={`p-1.5 rounded border transition ${
+              className={`p-1 rounded border transition cursor-pointer ${
                 showSafeZone
                   ? 'bg-[#2a2a30] text-sky-400 border-sky-900/50'
                   : 'bg-[#121214] text-gray-400 border-[#2c2c32] hover:text-gray-200'
               }`}
             >
-              <Tv className="w-3.5 h-3.5" />
+              <Tv className="w-3 h-3" />
             </button>
 
             {/* Fullscreen */}
             <button
               onClick={handleFullscreen}
               title="Fullscreen Preview"
-              className="p-1.5 rounded bg-[#121214] border border-[#2c2c32] text-gray-400 hover:text-gray-200 transition"
+              className="p-1 rounded bg-[#121214] border border-[#2c2c32] text-gray-400 hover:text-gray-200 transition cursor-pointer"
             >
-              <Maximize2 className="w-3.5 h-3.5" />
+              <Maximize2 className="w-3 h-3" />
             </button>
           </div>
         </div>
