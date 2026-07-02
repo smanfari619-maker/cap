@@ -67,7 +67,10 @@ export default function ClipInspector({ width }: { width: number }) {
     return (
       <div 
         className="flex flex-col h-full bg-[#18181c] border-l border-[#2c2c32] text-gray-300 select-none"
-        style={{ width, display: width === 0 ? 'none' : 'flex' }}
+        style={{ 
+          width: window.innerWidth < 768 ? '100%' : width, 
+          display: width === 0 ? 'none' : 'flex' 
+        }}
       >
         {/* Header */}
         <div className="h-9 border-b border-[#2c2c32] bg-[#1e1e22]/50 flex items-center px-3 text-xs font-semibold text-gray-400">
@@ -274,7 +277,10 @@ export default function ClipInspector({ width }: { width: number }) {
   return (
     <div 
       className="flex flex-col h-full bg-zinc-900/50 border-l border-zinc-800 text-zinc-200"
-      style={{ width, display: width === 0 ? 'none' : 'flex' }}
+      style={{ 
+        width: window.innerWidth < 768 ? '100%' : width, 
+        display: width === 0 ? 'none' : 'flex' 
+      }}
     >
       {/* Inspector Header */}
       <div className="p-4 border-b border-zinc-800 flex items-center justify-between">

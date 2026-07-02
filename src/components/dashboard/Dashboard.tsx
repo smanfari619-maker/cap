@@ -3,7 +3,8 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { 
   Plus, Trash2, Video, Film, Folder, Download, Upload, 
   Smartphone, Tv, Sparkles, Search, HardDrive, Cpu, 
-  Keyboard, Clock, ShieldCheck
+  Keyboard, Clock, ShieldCheck, Settings, HelpCircle, 
+  Bell, User, Scissors, MoreVertical, X, Image as ImageIcon
 } from 'lucide-react';
 import { db, type Project } from '../../lib/db';
 import { useEditorStore } from '../../store/editorStore';
@@ -32,6 +33,11 @@ export default function Dashboard() {
   const [storageEstimate, setStorageEstimate] = useState<{ used: number; total: number; percent: number } | null>(null);
   const [webGpuStatus, setWebGpuStatus] = useState<'checking' | 'active' | 'unavailable'>('checking');
   const [dragOverBackup, setDragOverBackup] = useState(false);
+
+  // Mobile layout state
+  const [mobileTab, setMobileTab] = useState<'edit' | 'templates' | 'inbox' | 'me'>('edit');
+  const [showMobileWatermarkTool, setShowMobileWatermarkTool] = useState(false);
+  const [activeProjectMenuId, setActiveProjectMenuId] = useState<string | null>(null);
 
   // templates config
   const templates = [
@@ -255,13 +261,13 @@ export default function Dashboard() {
   });
 
   return (
-    <div className="flex-1 overflow-y-auto bg-zinc-950 p-6 md:p-8 text-zinc-100 relative">
+    <div className="flex-1 overflow-y-auto bg-zinc-950 text-zinc-100 relative">
       {/* Decorative gradients */}
       <div className="absolute top-0 left-1/4 w-[600px] h-[600px] purple-glow-accent rounded-full blur-[140px] pointer-events-none" />
       <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] blue-glow-accent rounded-full blur-[120px] pointer-events-none" />
 
-      <div className="mx-auto max-w-7xl relative z-10 animate-fade-in-up">
-        
+      {/* DESKTOP LAYOUT */}
+      <div className="hidden md:block p-6 md:p-8 mx-auto max-w-7xl relative z-10 animate-fade-in-up">
         {/* Top Branding Header */}
         <div className="mb-10 flex flex-col justify-between gap-6 md:flex-row md:items-center border-b border-zinc-900 pb-8">
           <div className="flex flex-col gap-2">
@@ -477,7 +483,7 @@ export default function Dashboard() {
                               <button
                                 onClick={(e) => handleExportBackup(proj, e)}
                                 title="Download JSON backup"
-                                className="rounded-lg p-1.5 hover:bg-zinc-800 hover:text-zinc-300 text-zinc-600 transition cursor-pointer"
+                                className="rounded-lg p-1.5 hover:bg-zinc-800 hover:text-zinc-300 text-zinc-650 transition cursor-pointer"
                               >
                                 <Download className="w-3.5 h-3.5" />
                               </button>
@@ -540,7 +546,7 @@ export default function Dashboard() {
                 <div className="bg-zinc-900/40 border border-zinc-900 rounded-xl p-3">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2.5">
-                      <div className="p-2 bg-zinc-900 rounded-lg">
+                      <div className="p-2 bg-zinc-905 rounded-lg">
                         <HardDrive className="w-4 h-4 text-sky-400" />
                       </div>
                       <div>
@@ -609,7 +615,7 @@ export default function Dashboard() {
 
             {/* Keyboard Shortcuts Cheat Sheet side widget */}
             <div className="glass-panel rounded-2xl p-5">
-              <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-wider mb-4 flex items-center gap-2">
+              <h3 className="text-xs font-bold text-zinc-350 uppercase tracking-wider mb-4 flex items-center gap-2">
                 <Keyboard className="w-4 h-4 text-sky-400" /> Hotkey Cheat Sheet
               </h3>
               
@@ -636,102 +642,451 @@ export default function Dashboard() {
 
           </div>
         </div>
+      </div>
 
-        {/* Modal for Custom Project creation */}
-        {isCreating && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4">
-            <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl relative animate-fade-in-up">
-              <h3 className="text-lg font-bold text-zinc-100 mb-5">Create New Project</h3>
-              <form onSubmit={handleCreateProject} className="space-y-5">
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-400 mb-1.5">Project Name</label>
-                  <input
-                    type="text"
-                    required
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="My Stunning Video"
-                    className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm text-zinc-100 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-550 transition"
-                  />
-                </div>
+      {/* MOBILE LAYOUT */}
+      <div className="block md:hidden min-h-screen pb-24 px-4 pt-4 relative z-10 animate-fade-in-up">
+        {mobileTab === 'edit' && (
+          <>
+            {/* Mobile Header */}
+            <div className="flex justify-between items-center mb-6">
+              <div className="flex items-center gap-2">
+                <img src={jellycutLogo} className="h-6 w-auto" alt="Jellycut" />
+                <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-violet-500/25 bg-violet-500/10 text-violet-400 font-bold tracking-wide">
+                  PRO
+                </span>
+              </div>
+              <div className="flex items-center gap-3 text-zinc-400">
+                <Search className="w-5 h-5 cursor-pointer hover:text-zinc-200" />
+                <HelpCircle className="w-5 h-5 cursor-pointer hover:text-zinc-200" />
+                <Settings className="w-5 h-5 cursor-pointer hover:text-zinc-200" />
+              </div>
+            </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-400 mb-2">Aspect Ratio (Format)</label>
-                  <div className="grid grid-cols-4 gap-2">
-                    {[
-                      { id: '16-9', label: '16:9 Landscape', icon: Tv, sub: 'YouTube' },
-                      { id: '9-16', label: '9:16 Portrait', icon: Smartphone, sub: 'TikTok/Reels' },
-                      { id: '1-1', label: '1:1 Square', icon: Film, sub: 'Instagram' },
-                      { id: '21-9', label: '21:9 UltraWide', icon: Video, sub: 'Cinema' }
-                    ].map((item) => {
-                      const Icon = item.icon;
-                      const selected = aspectRatio === item.id;
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => setAspectRatio(item.id as any)}
-                          className={`flex flex-col items-center justify-center p-3 rounded-xl border text-center transition cursor-pointer ${
-                            selected
-                              ? 'bg-violet-600/10 border-violet-500 text-violet-400 shadow-md shadow-violet-500/5'
-                              : 'bg-zinc-950 border-zinc-850 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200'
-                          }`}
-                        >
-                          <Icon className={`w-5 h-5 mb-1.5 ${selected ? 'text-violet-400' : 'text-zinc-550'}`} />
-                          <span className="text-[10px] font-bold block">{item.label.split(' ')[0]}</span>
-                          <span className="text-[8px] opacity-60 block mt-0.5">{item.sub}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">Resolution</label>
-                    <select
-                      value={resolution}
-                      onChange={(e) => setResolution(e.target.value)}
-                      className="w-full rounded-lg border border-zinc-850 bg-zinc-950 px-4 py-2.5 text-sm text-zinc-100 focus:border-violet-500 focus:outline-none transition cursor-pointer"
-                    >
-                      <option value="1080p">1080p Full HD</option>
-                      <option value="720p">720p HD Ready</option>
-                      <option value="480p">480p Standard</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">Frame Rate (FPS)</label>
-                    <select
-                      value={fps}
-                      onChange={(e) => setFps(Number(e.target.value))}
-                      className="w-full rounded-lg border border-zinc-850 bg-zinc-950 px-4 py-2.5 text-sm text-zinc-100 focus:border-violet-500 focus:outline-none transition cursor-pointer"
-                    >
-                      <option value={30}>30 fps (Standard)</option>
-                      <option value={60}>60 fps (Smooth / Gaming)</option>
-                    </select>
-                  </div>
-                </div>
-                <div className="flex justify-end gap-3 pt-4 border-t border-zinc-800/80">
-                  <button
-                    type="button"
-                    onClick={() => setIsCreating(false)}
-                    className="px-4 py-2 text-xs font-semibold rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-400 hover:bg-zinc-900 transition cursor-pointer"
+            {/* Quick Actions Grid */}
+            <div className="grid grid-cols-5 gap-2 mb-6">
+              {[
+                { title: 'Script to video', icon: Video, bg: 'bg-sky-500/10 text-sky-400' },
+                { title: 'Smart Ads', icon: Smartphone, bg: 'bg-pink-500/10 text-pink-400' },
+                { title: 'Watermark', icon: ShieldCheck, bg: 'bg-emerald-500/10 text-emerald-400', action: () => setShowMobileWatermarkTool(true) },
+                { title: 'Text to image', icon: ImageIcon, bg: 'bg-purple-500/10 text-purple-400' },
+                { title: 'Expand', icon: Film, bg: 'bg-yellow-500/10 text-yellow-400' }
+              ].map((act, idx) => {
+                const IconComponent = act.icon || Sparkles;
+                return (
+                  <div 
+                    key={idx} 
+                    onClick={act.action || (() => {})} 
+                    className="flex flex-col items-center gap-1.5 cursor-pointer group"
                   >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-5 py-2 text-xs font-semibold rounded-lg text-white bg-violet-600 hover:bg-violet-500 hover:scale-[1.02] transition cursor-pointer shadow-lg shadow-violet-600/20"
-                  >
-                    Create Project
+                    <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${act.bg} group-hover:scale-105 transition`}>
+                      <IconComponent className="w-5 h-5" />
+                    </div>
+                    <span className="text-[9px] text-zinc-400 text-center font-medium leading-tight line-clamp-2">
+                      {act.title}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* New Project Gradient Button */}
+            <div 
+              onClick={() => setIsCreating(true)}
+              className="bg-gradient-to-r from-sky-500 via-violet-600 to-fuchsia-600 rounded-2xl p-6 mb-6 flex flex-col items-center justify-center gap-3 cursor-pointer shadow-lg shadow-violet-950/20 active:scale-[0.98] transition duration-200"
+            >
+              <div className="w-10 h-10 rounded-full bg-white text-zinc-950 flex items-center justify-center font-bold">
+                <Plus className="w-6 h-6" />
+              </div>
+              <span className="font-bold text-sm text-white">New project</span>
+            </div>
+
+            {/* Explore Section */}
+            <div className="mb-6">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="text-xs font-bold text-zinc-450 uppercase tracking-wider">Explore</h3>
+                <span className="text-[10px] text-zinc-500 cursor-pointer">View all &gt;</span>
+              </div>
+              <div className="flex gap-3 overflow-x-auto scrollbar-hide pb-2">
+                {templates.map((temp) => {
+                  const IconComp = temp.icon;
+                  return (
+                    <div 
+                      key={temp.id}
+                      onClick={() => handleCreateTemplate(temp.title, temp.w, temp.h)}
+                      className={`flex-none w-36 rounded-xl border border-zinc-850 p-3 bg-gradient-to-br ${temp.bg} flex flex-col justify-between h-24 cursor-pointer`}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className={`w-7 h-7 rounded-lg ${temp.iconBg} flex items-center justify-center`}>
+                          <IconComp className="w-4 h-4" />
+                        </div>
+                        <span className="text-[8px] text-zinc-550 px-1 bg-zinc-900/50 rounded border border-zinc-800">{temp.ratio}</span>
+                      </div>
+                      <span className="font-semibold text-[10px] text-zinc-200 truncate">{temp.title}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Projects Section */}
+            <div>
+              <div className="flex justify-between items-center mb-4 pb-2 border-b border-zinc-900">
+                <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Film className="w-3.5 h-3.5 text-sky-400" /> Projects
+                </h3>
+                <div className="flex items-center gap-2">
+                  <button className="flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
+                    <HardDrive className="w-3 h-3 text-sky-400" /> Space
                   </button>
                 </div>
-              </form>
+              </div>
+
+              {/* Projects List */}
+              {filteredProjects.length === 0 ? (
+                <div className="text-center py-10 border border-dashed border-zinc-850 rounded-xl bg-zinc-900/10">
+                  <Film className="w-8 h-8 text-zinc-700 mx-auto mb-2" />
+                  <p className="text-xs text-zinc-500">No projects yet. Tap 'New project' to start!</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {filteredProjects.map((proj) => {
+                    const durMs = getProjectDurationMs(proj);
+                    const ratio = proj.width / proj.height;
+                    let ratioLabel = '16:9';
+                    if (Math.abs(ratio - 9/16) < 0.1) ratioLabel = '9:16';
+                    else if (Math.abs(ratio - 1) < 0.1) ratioLabel = '1:1';
+                    else if (Math.abs(ratio - 21/9) < 0.1) ratioLabel = '21:9';
+
+                    return (
+                      <div 
+                        key={proj.id} 
+                        onClick={() => loadProject(proj.id)}
+                        className="flex items-center gap-3 p-2.5 bg-zinc-900/35 border border-zinc-850 rounded-xl active:bg-zinc-900/60 transition cursor-pointer relative"
+                      >
+                        {/* Preview */}
+                        <div className="w-16 h-12 bg-zinc-950 rounded-lg border border-zinc-800 flex items-center justify-center relative overflow-hidden shrink-0">
+                          <Video className="w-4 h-4 text-zinc-650" />
+                          <span className="absolute bottom-0.5 right-0.5 text-[7px] font-mono bg-black/80 text-sky-400 px-1 rounded">
+                            {formatTimecode(durMs)}
+                          </span>
+                          <span className="absolute top-0.5 left-0.5 text-[7px] bg-black/80 text-zinc-300 px-1 rounded">
+                            {ratioLabel}
+                          </span>
+                        </div>
+                        {/* Meta */}
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-semibold text-xs text-zinc-200 truncate">{proj.title}</h4>
+                          <p className="text-[9px] text-zinc-500 mt-0.5">{proj.width}x{proj.height} • {proj.fps} FPS</p>
+                          <p className="text-[9px] text-zinc-500 mt-0.5">Edited {new Date(proj.updatedAt).toLocaleDateString()}</p>
+                        </div>
+                        {/* Options */}
+                        <div className="relative">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveProjectMenuId(activeProjectMenuId === proj.id ? null : proj.id);
+                            }}
+                            className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-500 hover:text-zinc-300 transition"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </button>
+                          {activeProjectMenuId === proj.id && (
+                            <div className="absolute right-0 top-6 z-30 w-32 rounded-xl border border-zinc-800 bg-zinc-900 p-1 shadow-xl">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleExportBackup(proj, e); setActiveProjectMenuId(null); }}
+                                className="w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[10px] text-zinc-350 hover:bg-zinc-800 rounded-lg transition"
+                              >
+                                <Download className="w-3.5 h-3.5 text-zinc-400" />
+                                Export
+                              </button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleDeleteProject(proj.id, e); setActiveProjectMenuId(null); }}
+                                className="w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[10px] text-red-400 hover:bg-red-950/20 rounded-lg transition"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                Delete
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Float Banner: Celebrate 2026 */}
+            <div className="mt-8 relative overflow-hidden rounded-2xl bg-gradient-to-r from-red-650 via-pink-650 to-purple-650 p-4 flex justify-between items-center">
+              <div className="z-10">
+                <span className="text-[8px] tracking-widest font-bold uppercase text-white/80 block">Campaign</span>
+                <span className="font-extrabold text-sm text-white mt-0.5 block leading-tight">Celebrate 2026. Edit, Share, Win!</span>
+              </div>
+              <span className="text-3xl font-black text-white/20 select-none absolute right-4 bottom-1 rotate-12">2026</span>
+            </div>
+          </>
+        )}
+
+        {/* Templates Tab */}
+        {mobileTab === 'templates' && (
+          <div>
+            <h3 className="text-sm font-bold text-zinc-200 mb-4 pb-2 border-b border-zinc-905 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-violet-400" />
+              Templates
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              {templates.map((temp) => {
+                const IconComp = temp.icon;
+                return (
+                  <div 
+                    key={temp.id}
+                    onClick={() => handleCreateTemplate(temp.title, temp.w, temp.h)}
+                    className={`rounded-xl border border-zinc-850 p-4 bg-gradient-to-br ${temp.bg} flex flex-col justify-between h-32 cursor-pointer hover:border-violet-500/50 transition`}
+                  >
+                    <div className="flex justify-between items-start">
+                      <div className={`w-8 h-8 rounded-lg ${temp.iconBg} flex items-center justify-center`}>
+                        <IconComp className="w-4 h-4" />
+                      </div>
+                      <span className="text-[9px] text-zinc-550 px-1.5 py-0.5 bg-zinc-900/50 rounded border border-zinc-800">{temp.ratio}</span>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-xs text-zinc-100 block truncate">{temp.title}</span>
+                      <span className="text-[9px] text-zinc-500 block truncate mt-1">{temp.desc}</span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
 
+        {/* Inbox Tab */}
+        {mobileTab === 'inbox' && (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <Bell className="w-12 h-12 text-zinc-700 mb-3 animate-pulse" />
+            <h4 className="font-bold text-zinc-300 text-sm">Notifications</h4>
+            <p className="text-xs text-zinc-500 mt-1 max-w-[200px]">All caught up! You have no new messages or alerts at this time.</p>
+          </div>
+        )}
+
+        {/* Me Tab */}
+        {mobileTab === 'me' && (
+          <div className="space-y-6">
+            {/* Profile */}
+            <div className="flex items-center gap-4 bg-zinc-900/35 border border-zinc-850 p-4 rounded-2xl">
+              <div className="w-12 h-12 rounded-full bg-violet-650 flex items-center justify-center font-bold text-white text-lg">
+                J
+              </div>
+              <div>
+                <h4 className="font-bold text-zinc-200 text-sm">Jellycut Creator</h4>
+                <span className="text-[9px] mt-0.5 px-2 py-0.5 inline-block rounded bg-violet-600/20 text-violet-400 border border-violet-500/30 font-bold">
+                  PRO MEMBER
+                </span>
+              </div>
+            </div>
+
+            {/* Storage Estimate */}
+            <div className="bg-zinc-900/35 border border-zinc-850 p-4 rounded-2xl">
+              <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                <HardDrive className="w-3.5 h-3.5 text-sky-400" /> Storage Sandbox
+              </h3>
+              {storageEstimate ? (
+                <div>
+                  <div className="flex justify-between items-center text-xs font-semibold text-zinc-300 mb-1.5">
+                    <span>Browser sandbox usage</span>
+                    <span className="font-mono text-sky-400">{storageEstimate.percent}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-zinc-950 rounded-full overflow-hidden">
+                    <div className="h-full bg-sky-500 rounded-full transition-all duration-300" style={{ width: `${storageEstimate.percent}%` }} />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-zinc-500 mt-2">
+                    <span>Used: {formatBytes(storageEstimate.used)}</span>
+                    <span>Total Quota: {formatBytes(storageEstimate.total)}</span>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500">Loading storage metrics...</p>
+              )}
+            </div>
+
+            {/* GPU Status */}
+            <div className="bg-zinc-900/35 border border-zinc-850 p-4 rounded-2xl flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-violet-400" />
+                <span className="text-xs font-bold text-zinc-300">GPU Acceleration</span>
+              </div>
+              {webGpuStatus === 'active' ? (
+                <span className="text-[9px] px-2 py-0.5 bg-emerald-950/40 border border-emerald-900 text-emerald-400 font-bold rounded">
+                  WEBGL/WEBGPU ACTIVE
+                </span>
+              ) : (
+                <span className="text-[9px] px-2 py-0.5 bg-amber-950/40 border border-amber-900 text-amber-500 font-bold rounded">
+                  WASM FALLBACK
+                </span>
+              )}
+            </div>
+
+            {/* Restore/Import Backup button */}
+            <div className="bg-zinc-900/35 border border-zinc-850 p-4 rounded-2xl">
+              <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <Upload className="w-3.5 h-3.5 text-violet-400" /> Backup Management
+              </h3>
+              <p className="text-[10px] text-zinc-500 mb-3 leading-relaxed">Restore previous project configurations by selecting a JSON backup file below.</p>
+              <label className="flex items-center justify-center gap-2 w-full py-2.5 text-xs font-semibold rounded-xl border border-zinc-800 bg-zinc-900 hover:bg-zinc-850 transition cursor-pointer text-zinc-200">
+                <Upload className="w-4 h-4 text-sky-400" />
+                Select Backup File
+                <input type="file" accept=".json" onChange={handleImportBackup} className="hidden" />
+              </label>
+            </div>
+
+            {/* Offline notice */}
+            <div className="flex items-start gap-2 bg-zinc-950/40 border border-zinc-900 p-3 rounded-xl text-[10px] text-zinc-500">
+              <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
+              <p>Jellycut operates offline-first. Your projects and assets remain completely local inside this browser sandbox.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Mobile Sticky Bottom Nav Bar */}
+        <div className="fixed bottom-0 inset-x-0 bg-zinc-900 border-t border-zinc-800 py-2.5 px-6 flex justify-between items-center z-45 safe-bottom-padding">
+          {[
+            { id: 'edit', label: 'Edit', icon: Scissors },
+            { id: 'templates', label: 'Templates', icon: Sparkles },
+            { id: 'inbox', label: 'Inbox', icon: Bell },
+            { id: 'me', label: 'Me', icon: User }
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const active = mobileTab === tab.id;
+            return (
+              <button 
+                key={tab.id}
+                onClick={() => setMobileTab(tab.id as any)}
+                className={`flex flex-col items-center gap-1 cursor-pointer transition ${
+                  active ? 'text-violet-400' : 'text-zinc-500 hover:text-zinc-350'
+                }`}
+              >
+                <Icon className="w-5 h-5" />
+                <span className="text-[9px] font-bold">{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
+
+      {/* MODAL / OVERLAYS */}
+      {/* Modal for Custom Project creation */}
+      {isCreating && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl relative animate-fade-in-up">
+            <h3 className="text-lg font-bold text-zinc-105 mb-5">Create New Project</h3>
+            <form onSubmit={handleCreateProject} className="space-y-5">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">Project Name</label>
+                <input
+                  type="text"
+                  required
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="My Stunning Video"
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm text-zinc-100 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-550 transition"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-2">Aspect Ratio (Format)</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[
+                    { id: '16-9', label: '16:9 Landscape', icon: Tv, sub: 'YouTube' },
+                    { id: '9-16', label: '9:16 Portrait', icon: Smartphone, sub: 'TikTok/Reels' },
+                    { id: '1-1', label: '1:1 Square', icon: Film, sub: 'Instagram' },
+                    { id: '21-9', label: '21:9 UltraWide', icon: Video, sub: 'Cinema' }
+                  ].map((item) => {
+                    const Icon = item.icon;
+                    const selected = aspectRatio === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setAspectRatio(item.id as any)}
+                        className={`flex flex-col items-center justify-center p-3 rounded-xl border text-center transition cursor-pointer ${
+                          selected
+                            ? 'bg-violet-650/10 border-violet-500 text-violet-400 shadow-md shadow-violet-500/5'
+                            : 'bg-zinc-950 border-zinc-850 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200'
+                        }`}
+                      >
+                        <Icon className={`w-5 h-5 mb-1.5 ${selected ? 'text-violet-400' : 'text-zinc-550'}`} />
+                        <span className="text-[10px] font-bold block">{item.label.split(' ')[0]}</span>
+                        <span className="text-[8px] opacity-60 block mt-0.5">{item.sub}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-400 mb-1.5">Resolution</label>
+                  <select
+                    value={resolution}
+                    onChange={(e) => setResolution(e.target.value)}
+                    className="w-full rounded-lg border border-zinc-850 bg-zinc-950 px-4 py-2.5 text-sm text-zinc-100 focus:border-violet-500 focus:outline-none transition cursor-pointer"
+                  >
+                    <option value="1080p">1080p Full HD</option>
+                    <option value="720p">720p HD Ready</option>
+                    <option value="480p">480p Standard</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-400 mb-1.5">Frame Rate (FPS)</label>
+                  <select
+                    value={fps}
+                    onChange={(e) => setFps(Number(e.target.value))}
+                    className="w-full rounded-lg border border-zinc-850 bg-zinc-950 px-4 py-2.5 text-sm text-zinc-100 focus:border-violet-500 focus:outline-none transition cursor-pointer"
+                  >
+                    <option value={30}>30 fps (Standard)</option>
+                    <option value={60}>60 fps (Smooth / Gaming)</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 pt-4 border-t border-zinc-800/80">
+                <button
+                  type="button"
+                  onClick={() => setIsCreating(false)}
+                  className="px-4 py-2 text-xs font-semibold rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-450 hover:bg-zinc-900 transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 text-xs font-semibold rounded-lg text-white bg-violet-600 hover:bg-violet-500 hover:scale-[1.02] transition cursor-pointer shadow-lg shadow-violet-600/20"
+                >
+                  Create Project
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Watermark Remover Full Screen Overlay */}
+      {showMobileWatermarkTool && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950 p-4 pb-12">
+          <div className="flex justify-between items-center mb-4 pb-2 border-b border-zinc-850">
+            <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-violet-400" />
+              Gemini Watermark Remover
+            </h3>
+            <button 
+              onClick={() => setShowMobileWatermarkTool(false)}
+              className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-400"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <WatermarkRemoverTool />
+        </div>
+      )}
     </div>
   );
 }
