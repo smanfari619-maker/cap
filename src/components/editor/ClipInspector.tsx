@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Sliders, Palette, Eye, Volume2, Gauge, Move, RotateCcw, Eraser, Crosshair, Sparkles, Scissors } from 'lucide-react';
 import { useEditorStore } from '../../store/editorStore';
 import { db, type Asset } from '../../lib/db';
-import { removeWatermark } from '../../lib/watermark-remover';
+import { removeWatermark } from '../../lib/watermark';
 import WatermarkDrawModal from './WatermarkDrawModal';
 import { EFFECTS_REGISTRY } from '../../lib/effects-registry';
 

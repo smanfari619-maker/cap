@@ -9,6 +9,7 @@ import { db, type Project } from '../../lib/db';
 import { useEditorStore } from '../../store/editorStore';
 import { deleteDirectoryFromOPFS } from '../../lib/opfs';
 import jellycutLogo from '../../assets/jellycut_logo.svg';
+import WatermarkRemoverTool from './WatermarkRemoverTool';
 
 export default function Dashboard() {
   const loadProject = useEditorStore(state => state.loadProject);
@@ -500,7 +501,10 @@ export default function Dashboard() {
 
           {/* RIGHT SIDEBAR PANEL (4 Columns on Large Screen) */}
           <div className="lg:col-span-4 flex flex-col gap-6">
-            
+
+            {/* ── Gemini Watermark Remover Standalone Tool ── */}
+            <WatermarkRemoverTool />
+
             {/* Live System Status Widget */}
             <div className="glass-panel rounded-2xl p-5 relative overflow-hidden">
               <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-wider mb-4 flex items-center gap-2">

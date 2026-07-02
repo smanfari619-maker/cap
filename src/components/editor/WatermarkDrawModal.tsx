@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { getFileURLFromOPFS } from '../../lib/opfs';
 import { type Asset } from '../../lib/db';
-import { X, RefreshCw } from 'lucide-react';
+import { X, RefreshCw, Eraser } from 'lucide-react';
 
 interface WatermarkDrawModalProps {
   asset: Asset;
   initialTimeMs: number;
   onClose: () => void;
-  onConfirm: (region: { x: number; y: number; w: number; h: number }) => void;
+  onConfirm: (region: { x: number; y: number; w: number; h: number; maskData?: Uint8Array }) => void;
 }
 
 export default function WatermarkDrawModal({
@@ -21,12 +21,10 @@ export default function WatermarkDrawModal({
   const [naturalHeight, setNaturalHeight] = useState<number>(0);
   
   const videoRef = useRef<HTMLVideoElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Dragging / Selection state
-  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
-  const [currentPos, setCurrentPos] = useState<{ x: number; y: number } | null>(null);
-  const [selectedRegion, setSelectedRegion] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [hasDrawn, setHasDrawn] = useState(false);
 
   // Load the OPFS file Blob URL
   useEffect(() => {
@@ -58,58 +56,145 @@ export default function WatermarkDrawModal({
     video.currentTime = initialTimeMs / 1000;
   };
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
+  // Sync canvas size to video layout size
+  useEffect(() => {
+    if (!videoRef.current || !canvasRef.current || !naturalWidth || !naturalHeight) return;
+    
+    // We must wait for the video layout to settle
+    const observer = new ResizeObserver(() => {
+      if (videoRef.current && canvasRef.current) {
+        canvasRef.current.width = videoRef.current.clientWidth;
+        canvasRef.current.height = videoRef.current.clientHeight;
+        
+        // Reset canvas context properties after resize
+        const ctx = canvasRef.current.getContext('2d');
+        if (ctx) {
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.lineWidth = 15;
+          ctx.strokeStyle = 'rgba(139, 92, 246, 0.7)'; // Violet-500 with opacity
+        }
+      }
+    });
+    
+    observer.observe(videoRef.current);
+    return () => observer.disconnect();
+  }, [naturalWidth, naturalHeight]);
+
+  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    setDragStart({ x, y });
-    setCurrentPos({ x, y });
-    setSelectedRegion(null);
+
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    setIsDrawing(true);
+    setHasDrawn(true);
   };
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!dragStart) return;
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-    const y = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
-    setCurrentPos({ x, y });
+  const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    ctx.lineTo(x, y);
+    ctx.stroke();
   };
 
-  const handleMouseUp = () => {
-    if (!dragStart || !currentPos) return;
+  const stopDrawing = () => {
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     
-    const x = Math.min(dragStart.x, currentPos.x);
-    const y = Math.min(dragStart.y, currentPos.y);
-    const w = Math.abs(dragStart.x - currentPos.x);
-    const h = Math.abs(dragStart.y - currentPos.y);
+    ctx.closePath();
+    setIsDrawing(false);
+  };
 
-    if (w > 5 && h > 5) {
-      setSelectedRegion({ x, y, w, h });
-    }
-    setDragStart(null);
-    setCurrentPos(null);
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setHasDrawn(false);
   };
 
   const handleConfirm = () => {
-    if (!selectedRegion || !containerRef.current || !naturalWidth || !naturalHeight) return;
+    if (!hasDrawn || !canvasRef.current || !naturalWidth || !naturalHeight) return;
     
-    const rect = containerRef.current.getBoundingClientRect();
+    // To get pixel-perfect accuracy, we draw the overlay canvas onto an offscreen
+    // canvas that matches the exact natural resolution of the original video.
+    const offscreen = document.createElement('canvas');
+    offscreen.width = naturalWidth;
+    offscreen.height = naturalHeight;
+    const octx = offscreen.getContext('2d');
+    if (!octx) return;
+
+    // Draw and automatically scale the user's paint strokes to native resolution
+    octx.drawImage(canvasRef.current, 0, 0, naturalWidth, naturalHeight);
     
-    const x_rel = selectedRegion.x / rect.width;
-    const y_rel = selectedRegion.y / rect.height;
-    const w_rel = selectedRegion.w / rect.width;
-    const h_rel = selectedRegion.h / rect.height;
+    const imgData = octx.getImageData(0, 0, naturalWidth, naturalHeight);
+    const data = imgData.data;
 
-    const region = {
-      x: Math.round(x_rel * naturalWidth),
-      y: Math.round(y_rel * naturalHeight),
-      w: Math.round(w_rel * naturalWidth),
-      h: Math.round(h_rel * naturalHeight)
-    };
+    let minX = naturalWidth;
+    let minY = naturalHeight;
+    let maxX = 0;
+    let maxY = 0;
 
-    onConfirm(region);
+    // 1. Find bounding box of painted pixels
+    for (let y = 0; y < naturalHeight; y++) {
+      for (let x = 0; x < naturalWidth; x++) {
+        const alpha = data[(y * naturalWidth + x) * 4 + 3];
+        if (alpha > 0) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    if (minX > maxX || minY > maxY) {
+      // Nothing was drawn
+      return;
+    }
+
+    // Add a tiny bit of padding to the bounding box just in case
+    minX = Math.max(0, minX - 2);
+    minY = Math.max(0, minY - 2);
+    maxX = Math.min(naturalWidth - 1, maxX + 2);
+    maxY = Math.min(naturalHeight - 1, maxY + 2);
+
+    const w = maxX - minX + 1;
+    const h = maxY - minY + 1;
+
+    // 2. Extract tight Uint8Array mask
+    const maskData = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const srcX = minX + x;
+        const srcY = minY + y;
+        const alpha = data[(srcY * naturalWidth + srcX) * 4 + 3];
+        if (alpha > 0) {
+          maskData[y * w + x] = 1;
+        }
+      }
+    }
+
+    onConfirm({ x: minX, y: minY, w, h, maskData });
   };
 
   return (
@@ -119,9 +204,9 @@ export default function WatermarkDrawModal({
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3 mb-4">
           <div>
-            <h3 className="text-sm font-bold text-gray-100">Select Watermark Region</h3>
+            <h3 className="text-sm font-bold text-gray-100">Paint Watermark Region</h3>
             <p className="text-[10px] text-gray-500 mt-0.5">
-              Draw a box exactly over the watermark on the raw video preview frame.
+              Use the brush to paint precisely over the watermark.
             </p>
           </div>
           <button
@@ -133,57 +218,25 @@ export default function WatermarkDrawModal({
         </div>
 
         {/* Video Preview Container */}
-        <div className="flex-1 flex items-center justify-center bg-black rounded-lg border border-zinc-900 p-2 min-h-0 relative">
+        <div className="flex-1 flex items-center justify-center bg-black rounded-lg border border-zinc-900 p-2 min-h-0 relative overflow-hidden">
           {videoURL ? (
-            <div
-              ref={containerRef}
-              className="relative select-none inline-block max-w-full max-h-[60vh]"
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-            >
+            <div className="relative inline-block max-w-full max-h-[60vh]">
               <video
                 ref={videoRef}
                 src={videoURL}
                 onLoadedMetadata={handleLoadedMetadata}
-                className="max-w-full max-h-[60vh] block rounded pointer-events-none"
+                className="max-w-full max-h-[60vh] block rounded pointer-events-none select-none"
                 muted
                 playsInline
               />
-
-              {/* Selection overlay (transparent cover to capture drags) */}
-              <div className="absolute inset-0 cursor-crosshair" />
-
-              {/* Live drawing rectangle */}
-              {dragStart && currentPos && (
-                <div
-                  className="absolute border border-dashed border-violet-500 bg-violet-500/20 pointer-events-none"
-                  style={{
-                    left: Math.min(dragStart.x, currentPos.x),
-                    top: Math.min(dragStart.y, currentPos.y),
-                    width: Math.abs(dragStart.x - currentPos.x),
-                    height: Math.abs(dragStart.y - currentPos.y)
-                  }}
-                />
-              )}
-
-              {/* Confirmed selection region */}
-              {selectedRegion && (
-                <div
-                  className="absolute border-2 border-violet-500 bg-violet-500/10 pointer-events-none"
-                  style={{
-                    left: selectedRegion.x,
-                    top: selectedRegion.y,
-                    width: selectedRegion.w,
-                    height: selectedRegion.h
-                  }}
-                >
-                  <div className="absolute -top-1 -left-1 w-2 h-2 bg-violet-500 rounded-sm" />
-                  <div className="absolute -top-1 -right-1 w-2 h-2 bg-violet-500 rounded-sm" />
-                  <div className="absolute -bottom-1 -left-1 w-2 h-2 bg-violet-500 rounded-sm" />
-                  <div className="absolute -bottom-1 -right-1 w-2 h-2 bg-violet-500 rounded-sm" />
-                </div>
-              )}
+              <canvas
+                ref={canvasRef}
+                className="absolute inset-0 z-10 cursor-crosshair touch-none"
+                onMouseDown={startDrawing}
+                onMouseMove={draw}
+                onMouseUp={stopDrawing}
+                onMouseLeave={stopDrawing}
+              />
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center gap-2 py-20">
@@ -195,17 +248,19 @@ export default function WatermarkDrawModal({
 
         {/* Footer controls */}
         <div className="flex items-center justify-between border-t border-zinc-800 pt-4 mt-4">
-          <div className="text-[10px] text-zinc-500 font-mono">
+          <div className="text-[10px] text-zinc-500 font-mono flex items-center gap-4">
             {naturalWidth && naturalHeight ? (
               <span>Video Resolution: {naturalWidth}×{naturalHeight} px</span>
             ) : (
               <span>Loading video resolution...</span>
             )}
-            {selectedRegion && containerRef.current && (
-              <span className="ml-4 text-violet-400">
-                Selected: {Math.round((selectedRegion.w / containerRef.current.clientWidth) * naturalWidth)}×
-                {Math.round((selectedRegion.h / containerRef.current.clientHeight) * naturalHeight)} px
-              </span>
+            {hasDrawn && (
+              <button 
+                onClick={clearCanvas}
+                className="flex items-center gap-1.5 text-zinc-400 hover:text-red-400 transition"
+              >
+                <Eraser className="w-3 h-3" /> Clear Brush
+              </button>
             )}
           </div>
           <div className="flex gap-2">
@@ -217,7 +272,7 @@ export default function WatermarkDrawModal({
             </button>
             <button
               onClick={handleConfirm}
-              disabled={!selectedRegion}
+              disabled={!hasDrawn}
               className="px-4 py-1.5 rounded-lg text-xs font-bold bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white transition disabled:cursor-not-allowed"
             >
               Confirm Region

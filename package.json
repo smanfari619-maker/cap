@@ -19,6 +19,7 @@
     "lucide-react": "^1.21.0",
     "mp4-muxer": "^5.2.2",
     "mp4box": "^2.4.1",
+    "onnxruntime-web": "^1.27.0",
     "opencv-js-wasm": "^5.0.0-alpha",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
