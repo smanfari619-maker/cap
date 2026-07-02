@@ -16,7 +16,7 @@ const tabs = [
   { id: 'text', label: 'Text', icon: Type },
   { id: 'stickers', label: 'Stickers', icon: Smile },
   { id: 'effects', label: 'Effects', icon: Sparkles },
-  { id: 'transitions', label: 'Transitions', icon: Scissors },
+  { id: 'transitions', label: 'Transitions', icon: Zap },
   { id: 'captions', label: 'Captions', icon: Languages },
   { id: 'filters', label: 'Filters', icon: Palette },
   { id: 'adjustment', label: 'Adjustment', icon: Sliders },
@@ -840,8 +840,15 @@ export default function EditorLayout() {
                 onClick={() => { setActiveTab('transitions'); setShowMobileSheet(true); }}
                 className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
               >
-                <Scissors className="w-5 h-5" />
+                <Zap className="w-5 h-5 text-amber-400" />
                 <span className="text-[9px] font-bold">Transitions</span>
+              </button>
+              <button 
+                onClick={() => { setActiveTab('captions'); setShowMobileSheet(true); }}
+                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+              >
+                <Languages className="w-5 h-5" />
+                <span className="text-[9px] font-bold">Captions</span>
               </button>
               <button 
                 onClick={() => { setActiveTab('filters'); setShowMobileSheet(true); }}
@@ -856,6 +863,13 @@ export default function EditorLayout() {
               >
                 <Sliders className="w-5 h-5" />
                 <span className="text-[9px] font-bold">Adjust</span>
+              </button>
+              <button 
+                onClick={() => { setActiveTab('ai-avatars'); setShowMobileSheet(true); }}
+                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+              >
+                <Users className="w-5 h-5" />
+                <span className="text-[9px] font-bold">AI Avatars</span>
               </button>
             </div>
           )}

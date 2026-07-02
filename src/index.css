@@ -39,10 +39,12 @@ body {
   color: #f4f4f5;
   overflow: hidden;
   height: 100vh;
+  height: 100dvh;
 }
 
 #root {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
 }
@@ -295,3 +297,7 @@ input[type="range"]::-moz-range-thumb:hover {
   animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+/* Safe area bottom padding for notch devices */
+.safe-bottom-padding {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 0.75rem) !important;
+}
