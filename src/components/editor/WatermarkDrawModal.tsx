@@ -81,7 +81,7 @@ export default function WatermarkDrawModal({
     return () => observer.disconnect();
   }, [naturalWidth, naturalHeight]);
 
-  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const startDrawing = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -97,7 +97,7 @@ export default function WatermarkDrawModal({
     setHasDrawn(true);
   };
 
-  const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const draw = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawing) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -232,10 +232,10 @@ export default function WatermarkDrawModal({
               <canvas
                 ref={canvasRef}
                 className="absolute inset-0 z-10 cursor-crosshair touch-none"
-                onMouseDown={startDrawing}
-                onMouseMove={draw}
-                onMouseUp={stopDrawing}
-                onMouseLeave={stopDrawing}
+                onPointerDown={startDrawing}
+                onPointerMove={draw}
+                onPointerUp={stopDrawing}
+                onPointerLeave={stopDrawing}
               />
             </div>
           ) : (

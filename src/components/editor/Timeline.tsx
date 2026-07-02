@@ -230,6 +230,12 @@ export default function Timeline({ height }: { height: number }) {
   };
 
   const containerRef = useRef<HTMLDivElement>(null);
+  
+  // Mobile touch gesture & double tap refs
+  const touchStartDistRef = useRef<number | null>(null);
+  const touchStartZoomRef = useRef<number>(300);
+  const lastTapRef = useRef<{ id: string; time: number } | null>(null);
+
   const pxPerMs = zoom / 1000;
 
   // Calculate dynamic timeline duration based on actual clips (minimum 1 minute, with 30s padding)
@@ -970,12 +976,49 @@ export default function Timeline({ height }: { height: number }) {
     // are handled natively by the browser — no interception.
   };
 
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      touchStartDistRef.current = Math.sqrt(dx * dx + dy * dy);
+      touchStartZoomRef.current = useEditorStore.getState().zoom;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && touchStartDistRef.current !== null) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist === 0) return;
+      
+      const ratio = dist / touchStartDistRef.current;
+      const newZoom = Math.max(50, Math.min(3000, touchStartZoomRef.current * ratio));
+      setZoom(newZoom);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    touchStartDistRef.current = null;
+  };
+
+  const handleClipTap = (clipId: string) => {
+    const now = Date.now();
+    if (lastTapRef.current && lastTapRef.current.id === clipId && now - lastTapRef.current.time < 350) {
+      // Dispatch custom DOM event to notify EditorLayout to open properties drawer
+      window.dispatchEvent(new CustomEvent('open-mobile-properties'));
+      lastTapRef.current = null;
+    } else {
+      lastTapRef.current = { id: clipId, time: now };
+    }
+  };
+
   if (!project) return null;
 
   const zoomIn = () => setZoom(zoom * 1.3);
   const zoomOut = () => setZoom(zoom / 1.3);
 
-  const handleRulerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleRulerMouseDown = (e: React.PointerEvent<HTMLDivElement>) => {
     // Stop the event from bubbling to the tracks area container so it
     // doesn't accidentally trigger the marquee selection.
     e.stopPropagation();
@@ -993,7 +1036,7 @@ export default function Timeline({ height }: { height: number }) {
     updateTimeFromX(e.clientX);
 
     let rafId: number | null = null;
-    const handleMouseMove = (moveEvent: MouseEvent) => {
+    const handleMouseMove = (moveEvent: PointerEvent) => {
       // Don't move the playhead while the context menu is open
       if (contextMenuRef.current) return;
       if (rafId) return;
@@ -1007,12 +1050,12 @@ export default function Timeline({ height }: { height: number }) {
       if (rafId) {
         window.cancelAnimationFrame(rafId);
       }
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('pointermove', handleMouseMove);
+      window.removeEventListener('pointerup', handleMouseUp);
     };
 
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('pointermove', handleMouseMove);
+    window.addEventListener('pointerup', handleMouseUp);
   };
 
   const handleAddTextClip = async () => {
@@ -1115,9 +1158,9 @@ export default function Timeline({ height }: { height: number }) {
     await updateTracks(updatedTracks);
   };
 
-  const handleAreaMouseDown = (e: React.MouseEvent) => {
-    // Only left click
-    if (e.button !== 0) return;
+  const handleAreaMouseDown = (e: React.PointerEvent) => {
+    // Only left click for mouse
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     // Ignore if clicked on a clip or a button
     if ((e.target as HTMLElement).closest('.cursor-grab') || (e.target as HTMLElement).closest('button')) {
       return;
@@ -1151,7 +1194,7 @@ export default function Timeline({ height }: { height: number }) {
       active: true
     });
 
-    const handleMouseMove = (moveEvent: MouseEvent) => {
+    const handleMouseMove = (moveEvent: PointerEvent) => {
       if (!containerRef.current) return;
       const moveRect = containerRef.current.getBoundingClientRect();
       const currentX = moveEvent.clientX - moveRect.left + containerRef.current.scrollLeft;
@@ -1202,16 +1245,16 @@ export default function Timeline({ height }: { height: number }) {
 
     const handleMouseUp = () => {
       setSelectionBox(null);
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('pointermove', handleMouseMove);
+      window.removeEventListener('pointerup', handleMouseUp);
     };
 
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('pointermove', handleMouseMove);
+    window.addEventListener('pointerup', handleMouseUp);
   };
 
   const handleGainMouseDown = (
-    e: React.MouseEvent,
+    e: React.PointerEvent,
     clipId: string,
     initialVolume: number
   ) => {
@@ -1222,23 +1265,23 @@ export default function Timeline({ height }: { height: number }) {
     // Scale sensitivity: 1px = 1.5% volume change
     const sensitivity = 1.5;
 
-    const handleMouseMove = (moveEvent: MouseEvent) => {
+    const handleMouseMove = (moveEvent: PointerEvent) => {
       const deltaY = startY - moveEvent.clientY; // drag up = volume increase
       const newVolume = Math.max(0, Math.min(100, Math.round(initialVolume + deltaY * sensitivity)));
       updateClip(clipId, { volume: newVolume });
     };
 
     const handleMouseUp = () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('pointermove', handleMouseMove);
+      window.removeEventListener('pointerup', handleMouseUp);
     };
 
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('pointermove', handleMouseMove);
+    window.addEventListener('pointerup', handleMouseUp);
   };
 
   const handleTransitionResizeMouseDown = (
-    e: React.MouseEvent,
+    e: React.PointerEvent,
     clipId: string,
     edge: 'left' | 'right',
     initialDurationMs: number,
@@ -1246,7 +1289,7 @@ export default function Timeline({ height }: { height: number }) {
   ) => {
     e.stopPropagation();
     e.preventDefault();
-    if (e.button !== 0) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
 
     const startX = e.clientX;
     const clip = project?.tracks.flatMap(t => t.clips).find(c => c.id === clipId);
@@ -1256,7 +1299,7 @@ export default function Timeline({ height }: { height: number }) {
     // Max duration is limited by the length of the two clips
     const maxDuration = 2 * Math.min(prevClip.durationMs, clip.durationMs);
 
-    const handleMouseMove = (moveEvent: MouseEvent) => {
+    const handleMouseMove = (moveEvent: PointerEvent) => {
       const deltaX = moveEvent.clientX - startX;
       const deltaMs = deltaX / pxPerMs;
       
@@ -1281,22 +1324,22 @@ export default function Timeline({ height }: { height: number }) {
     };
 
     const handleMouseUp = () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('pointermove', handleMouseMove);
+      window.removeEventListener('pointerup', handleMouseUp);
     };
 
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('pointermove', handleMouseMove);
+    window.addEventListener('pointerup', handleMouseUp);
   };
 
   const handleClipMouseDown = (
-    e: React.MouseEvent,
+    e: React.PointerEvent,
     trackId: string,
     clip: TimelineClip,
     action: 'move' | 'trim-start' | 'trim-end'
   ) => {
     e.stopPropagation();
-    if (e.button !== 0) return; // Only allow left-click to drag or trim
+    if (e.pointerType === 'mouse' && e.button !== 0) return; // Only allow left-click to drag or trim
 
     const isShiftOrCmd = e.shiftKey || e.metaKey || e.ctrlKey;
     let currentSelectedIds = [...selectedClipIds];
@@ -1376,7 +1419,7 @@ export default function Timeline({ height }: { height: number }) {
       if (snapLineEl) { snapLineEl.remove(); snapLineEl = null; }
     };
 
-    const handleMouseMove = (moveEvent: MouseEvent) => {
+    const handleMouseMove = (moveEvent: PointerEvent) => {
       // Don't drag clips while the context menu is open
       if (contextMenuRef.current) return;
 
@@ -1463,189 +1506,189 @@ export default function Timeline({ height }: { height: number }) {
 
           if (!snapped) hideSnapLine();
 
-        const actualDeltaMs = newPos - startPosition;
+          const actualDeltaMs = newPos - startPosition;
 
-// Determine which track is hovered vertically (including boundary auto-creation)
-        let targetTrackId = trackId;
-        let tracksForThisMove = [...liveProject.tracks];
+          // Determine which track is hovered vertically (including boundary auto-creation)
+          let targetTrackId = trackId;
+          let tracksForThisMove = [...liveProject.tracks];
 
-        if (containerRef.current) {
-          const rect = containerRef.current.getBoundingClientRect();
-          // 36 is RULER_HEIGHT, 4 is pt-1 padding
-          const relativeY = moveEvent.clientY - rect.top - 36 - 4;
-          
-          // Calculate tops and bottoms of all tracks
-          let currentTop = 0;
-          const trackTops = new Map<string, number>();
-          const trackHeights = new Map<string, number>();
-          for (const t of tracksForThisMove) {
-            const tHeight = getTrackHeight(t.type);
-            trackTops.set(t.id, currentTop);
-            trackHeights.set(t.id, tHeight);
-            currentTop += tHeight + 6; // Include 6px margin-bottom gap
-          }
+          if (containerRef.current) {
+            const rect = containerRef.current.getBoundingClientRect();
+            // 36 is RULER_HEIGHT, 4 is pt-1 padding
+            const relativeY = moveEvent.clientY - rect.top - 36 - 4;
+            
+            // Calculate tops and bottoms of all tracks
+            let currentTop = 0;
+            const trackTops = new Map<string, number>();
+            const trackHeights = new Map<string, number>();
+            for (const t of tracksForThisMove) {
+              const tHeight = getTrackHeight(t.type);
+              trackTops.set(t.id, currentTop);
+              trackHeights.set(t.id, tHeight);
+              currentTop += tHeight + 6; // Include 6px margin-bottom gap
+            }
 
-          const isClipVisual = clip.type === 'video' || clip.type === 'image';
-          const sameTypeTracks = tracksForThisMove.filter(t => 
-            isClipVisual 
-              ? (t.type === 'video' || (t.type as string) === 'image') 
-              : t.type === clip.type
-          );
+            const isClipVisual = clip.type === 'video' || clip.type === 'image';
+            const sameTypeTracks = tracksForThisMove.filter(t => 
+              isClipVisual 
+                ? (t.type === 'video' || (t.type as string) === 'image') 
+                : t.type === clip.type
+            );
 
-          if (sameTypeTracks.length > 0) {
-            const firstTrack = sameTypeTracks[0];
-            const lastTrack = sameTypeTracks[sameTypeTracks.length - 1];
-            const firstTop = trackTops.get(firstTrack.id) || 0;
-            const lastBottom = (trackTops.get(lastTrack.id) || 0) + (trackHeights.get(lastTrack.id) || 0);
+            if (sameTypeTracks.length > 0) {
+              const firstTrack = sameTypeTracks[0];
+              const lastTrack = sameTypeTracks[sameTypeTracks.length - 1];
+              const firstTop = trackTops.get(firstTrack.id) || 0;
+              const lastBottom = (trackTops.get(lastTrack.id) || 0) + (trackHeights.get(lastTrack.id) || 0);
 
-            if (relativeY < firstTop - 10) {
-              // Dragged above the first track of this type
-              const isFirstTrackEmpty = firstTrack.clips.every(c => currentSelectedIds.includes(c.id));
-              if (!isFirstTrackEmpty) {
-                // Auto-create a new track at the top of this type
-                const targetType = isClipVisual ? 'video' : clip.type;
-                const newTrackId = Math.random().toString(36).substring(2, 9);
-                const typeLabels: Record<string, string> = {
-                  video: 'Video', audio: 'Audio', text: 'Text'
-                };
-                const existingCount = tracksForThisMove.filter(t => t.type === targetType).length;
-                const newTrack: TimelineTrack = {
-                  id: newTrackId,
-                  name: `${typeLabels[targetType] || 'Video'} ${existingCount + 1}`,
-                  type: targetType as 'video' | 'audio' | 'text',
-                  clips: [],
-                  locked: false,
-                  muted: false,
-                  hidden: false
-                };
-                const idx = tracksForThisMove.findIndex(t => t.id === firstTrack.id);
-                tracksForThisMove.splice(idx, 0, newTrack);
-                targetTrackId = newTrackId;
-              } else {
-                targetTrackId = firstTrack.id;
-              }
-            } else if (relativeY > lastBottom + 10) {
-              // Dragged below the last track of this type
-              const isLastTrackEmpty = lastTrack.clips.every(c => currentSelectedIds.includes(c.id));
-              if (!isLastTrackEmpty) {
-                // Auto-create a new track at the bottom of this type
-                const targetType = isClipVisual ? 'video' : clip.type;
-                const newTrackId = Math.random().toString(36).substring(2, 9);
-                const typeLabels: Record<string, string> = {
-                  video: 'Video', audio: 'Audio', text: 'Text'
-                };
-                const existingCount = tracksForThisMove.filter(t => t.type === targetType).length;
-                const newTrack: TimelineTrack = {
-                  id: newTrackId,
-                  name: `${typeLabels[targetType] || 'Video'} ${existingCount + 1}`,
-                  type: targetType as 'video' | 'audio' | 'text',
-                  clips: [],
-                  locked: false,
-                  muted: false,
-                  hidden: false
-                };
-                const idx = tracksForThisMove.findIndex(t => t.id === lastTrack.id);
-                tracksForThisMove.splice(idx + 1, 0, newTrack);
-                targetTrackId = newTrackId;
-              } else {
-                targetTrackId = lastTrack.id;
-              }
-            } else {
-              // Standard hover detection
-              let tempTop = 0;
-              for (const t of tracksForThisMove) {
-                const tHeight = getTrackHeight(t.type);
-                if (relativeY >= tempTop && relativeY < tempTop + tHeight + 6) {
-                  const isTrackVisual = t.type === 'video' || (t.type as string) === 'image';
-                  const isCompatible = (t.type === clip.type) || (isTrackVisual && isClipVisual);
-                  if (isCompatible && !t.locked) {
-                    targetTrackId = t.id;
-                  }
-                  break;
+              if (relativeY < firstTop - 10) {
+                // Dragged above the first track of this type
+                const isFirstTrackEmpty = firstTrack.clips.every(c => currentSelectedIds.includes(c.id));
+                if (!isFirstTrackEmpty) {
+                  // Auto-create a new track at the top of this type
+                  const targetType = isClipVisual ? 'video' : clip.type;
+                  const newTrackId = Math.random().toString(36).substring(2, 9);
+                  const typeLabels: Record<string, string> = {
+                    video: 'Video', audio: 'Audio', text: 'Text'
+                  };
+                  const existingCount = tracksForThisMove.filter(t => t.type === targetType).length;
+                  const newTrack: TimelineTrack = {
+                    id: newTrackId,
+                    name: `${typeLabels[targetType] || 'Video'} ${existingCount + 1}`,
+                    type: targetType as 'video' | 'audio' | 'text',
+                    clips: [],
+                    locked: false,
+                    muted: false,
+                    hidden: false
+                  };
+                  const idx = tracksForThisMove.findIndex(t => t.id === firstTrack.id);
+                  tracksForThisMove.splice(idx, 0, newTrack);
+                  targetTrackId = newTrackId;
+                } else {
+                  targetTrackId = firstTrack.id;
                 }
-                tempTop += tHeight + 6;
+              } else if (relativeY > lastBottom + 10) {
+                // Dragged below the last track of this type
+                const isLastTrackEmpty = lastTrack.clips.every(c => currentSelectedIds.includes(c.id));
+                if (!isLastTrackEmpty) {
+                  // Auto-create a new track at the bottom of this type
+                  const targetType = isClipVisual ? 'video' : clip.type;
+                  const newTrackId = Math.random().toString(36).substring(2, 9);
+                  const typeLabels: Record<string, string> = {
+                    video: 'Video', audio: 'Audio', text: 'Text'
+                  };
+                  const existingCount = tracksForThisMove.filter(t => t.type === targetType).length;
+                  const newTrack: TimelineTrack = {
+                    id: newTrackId,
+                    name: `${typeLabels[targetType] || 'Video'} ${existingCount + 1}`,
+                    type: targetType as 'video' | 'audio' | 'text',
+                    clips: [],
+                    locked: false,
+                    muted: false,
+                    hidden: false
+                  };
+                  const idx = tracksForThisMove.findIndex(t => t.id === lastTrack.id);
+                  tracksForThisMove.splice(idx + 1, 0, newTrack);
+                  targetTrackId = newTrackId;
+                } else {
+                  targetTrackId = lastTrack.id;
+                }
+              } else {
+                // Standard hover detection
+                let tempTop = 0;
+                for (const t of tracksForThisMove) {
+                  const tHeight = getTrackHeight(t.type);
+                  if (relativeY >= tempTop && relativeY < tempTop + tHeight + 6) {
+                    const isTrackVisual = t.type === 'video' || (t.type as string) === 'image';
+                    const isCompatible = (t.type === clip.type) || (isTrackVisual && isClipVisual);
+                    if (isCompatible && !t.locked) {
+                      targetTrackId = t.id;
+                    }
+                    break;
+                  }
+                  tempTop += tHeight + 6;
+                }
               }
             }
           }
-        }
 
-        // 1. Extract moving clips and temporarily assign their targetTrackId
-        const clipsToMove: any[] = [];
-        const tempTracks = tracksForThisMove.map(t => {
-          const remainingClips = [];
-          for (const c of t.clips) {
-            if (currentSelectedIds.includes(c.id)) {
-              clipsToMove.push({
-                ...c,
-                targetTrackId: t.id === trackId ? targetTrackId : t.id
-              });
-            } else {
-              remainingClips.push(c);
+          // 1. Extract moving clips and temporarily assign their targetTrackId
+          const clipsToMove: any[] = [];
+          const tempTracks = tracksForThisMove.map(t => {
+            const remainingClips = [];
+            for (const c of t.clips) {
+              if (currentSelectedIds.includes(c.id)) {
+                clipsToMove.push({
+                  ...c,
+                  targetTrackId: t.id === trackId ? targetTrackId : t.id
+                });
+              } else {
+                remainingClips.push(c);
+              }
             }
-          }
-          return { ...t, clips: remainingClips };
-        });
+            return { ...t, clips: remainingClips };
+          });
 
-        // 2. Re-insert the moving clips into their target tracks
-        updatedTracks = tempTracks.map(t => {
-          const clipsForThisTrack = clipsToMove.filter(c => c.targetTrackId === t.id);
-          
-          let rippleDelta = 0;
-          if (rippleEnabledRef.current && t.id === targetTrackId) {
-            rippleDelta = actualDeltaMs;
-          }
+          // 2. Re-insert the moving clips into their target tracks
+          updatedTracks = tempTracks.map(t => {
+            const clipsForThisTrack = clipsToMove.filter(c => c.targetTrackId === t.id);
+            
+            let rippleDelta = 0;
+            if (rippleEnabledRef.current && t.id === targetTrackId) {
+              rippleDelta = actualDeltaMs;
+            }
 
-          const updatedClipsForThisTrack = clipsForThisTrack.map(c => {
-            const startPosObj = movingClips.find((sp: { id: string; pos: number }) => sp.id === c.id);
-            const originalStartPos = startPosObj ? startPosObj.pos : c.positionMs;
-            const { targetTrackId: _, ...cleanClip } = c;
+            const updatedClipsForThisTrack = clipsForThisTrack.map(c => {
+              const startPosObj = movingClips.find((sp: { id: string; pos: number }) => sp.id === c.id);
+              const originalStartPos = startPosObj ? startPosObj.pos : c.positionMs;
+              const { targetTrackId: _, ...cleanClip } = c;
+              return {
+                ...cleanClip,
+                positionMs: Math.max(0, originalStartPos + actualDeltaMs)
+              };
+            });
+
+            // Apply ripple shift to other non-moving clips starting at or after the original position
+            const shiftedRemainingClips = t.clips.map(c => {
+              if (rippleDelta !== 0 && c.positionMs >= startPosition) {
+                return {
+                  ...c,
+                  positionMs: Math.max(0, c.positionMs + rippleDelta)
+                };
+              }
+              return c;
+            });
+
+            const combinedClips = [...shiftedRemainingClips, ...updatedClipsForThisTrack];
+
+            // Sort clips: if positions are equal, prioritize moving clips so they stay at their drop position and push others
+            const sortedClips = combinedClips.sort((a, b) => {
+              if (a.positionMs !== b.positionMs) {
+                return a.positionMs - b.positionMs;
+              }
+              const aMoving = currentSelectedIds.includes(a.id);
+              const bMoving = currentSelectedIds.includes(b.id);
+              if (aMoving && !bMoving) return -1;
+              if (!aMoving && bMoving) return 1;
+              return 0;
+            });
+
+            // Resolve overlaps (push overlapping clips to the right)
+            for (let i = 1; i < sortedClips.length; i++) {
+              const prev = sortedClips[i - 1];
+              const curr = sortedClips[i];
+              if (curr.positionMs < prev.positionMs + prev.durationMs) {
+                curr.positionMs = prev.positionMs + prev.durationMs;
+              }
+            }
+
             return {
-              ...cleanClip,
-              positionMs: Math.max(0, originalStartPos + actualDeltaMs)
+              ...t,
+              clips: sortedClips
             };
           });
-
-          // Apply ripple shift to other non-moving clips starting at or after the original position
-          const shiftedRemainingClips = t.clips.map(c => {
-            if (rippleDelta !== 0 && c.positionMs >= startPosition) {
-              return {
-                ...c,
-                positionMs: Math.max(0, c.positionMs + rippleDelta)
-              };
-            }
-            return c;
-          });
-
-          const combinedClips = [...shiftedRemainingClips, ...updatedClipsForThisTrack];
-
-          // Sort clips: if positions are equal, prioritize moving clips so they stay at their drop position and push others
-          const sortedClips = combinedClips.sort((a, b) => {
-            if (a.positionMs !== b.positionMs) {
-              return a.positionMs - b.positionMs;
-            }
-            const aMoving = currentSelectedIds.includes(a.id);
-            const bMoving = currentSelectedIds.includes(b.id);
-            if (aMoving && !bMoving) return -1;
-            if (!aMoving && bMoving) return 1;
-            return 0;
-          });
-
-          // Resolve overlaps (push overlapping clips to the right)
-          for (let i = 1; i < sortedClips.length; i++) {
-            const prev = sortedClips[i - 1];
-            const curr = sortedClips[i];
-            if (curr.positionMs < prev.positionMs + prev.durationMs) {
-              curr.positionMs = prev.positionMs + prev.durationMs;
-            }
-          }
-
-          return {
-            ...t,
-            clips: sortedClips
-          };
-        });
-      }
-    } else if (action === 'trim-start') {
+        }
+      } else if (action === 'trim-start') {
         const isImage = clip.type === 'image';
         let newPos, newDur, newTrimStart;
 
@@ -1765,8 +1808,8 @@ export default function Timeline({ height }: { height: number }) {
 
     const handleMouseUp = () => {
       hideSnapLine();
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('pointermove', handleMouseMove);
+      window.removeEventListener('pointerup', handleMouseUp);
 
       // Commit the final drag/trim state to IndexedDB & add to history
       const finalStore = useEditorStore.getState();
@@ -1775,8 +1818,8 @@ export default function Timeline({ height }: { height: number }) {
       }
     };
 
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('pointermove', handleMouseMove);
+    window.addEventListener('pointerup', handleMouseUp);
   };
 
   const splitKeyframeTrack = (
@@ -1974,8 +2017,8 @@ export default function Timeline({ height }: { height: number }) {
 
     return (
       <div 
-        onMouseDown={handleRulerMouseDown} 
-        className="sticky top-0 h-6 border-b border-[#2c2c32] bg-[#0a0a0d] cursor-ew-resize flex-shrink-0 z-40"
+        onPointerDown={handleRulerMouseDown} 
+        className="sticky top-0 h-6 border-b border-[#2c2c32] bg-[#0a0a0d] cursor-ew-resize flex-shrink-0 z-40 touch-none"
         data-ruler="true"
         style={{ minWidth: `${timelineMinWidth}px` }}
       >
@@ -2248,7 +2291,10 @@ export default function Timeline({ height }: { height: number }) {
           ref={containerRef}
           onScroll={handleScroll}
           onWheel={handleWheel}
-          onMouseDown={handleAreaMouseDown}
+          onPointerDown={handleAreaMouseDown}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
           onDragOver={handleAreaDragOver}
           onDrop={handleAreaDrop}
           className="flex-1 overflow-x-scroll overflow-y-auto relative bg-[#16161a] timeline-scroll"
@@ -2362,6 +2408,10 @@ export default function Timeline({ height }: { height: number }) {
                             splitClipAtTime(track.id, clip, splitPointMs, e.shiftKey);
                             return;
                           }
+                          
+                          // Track tap for mobile double-tap detection
+                          handleClipTap(clip.id);
+
                           if (e.shiftKey) {
                             if (selectedClipIds.includes(clip.id)) {
                               setSelectedClipIds(selectedClipIds.filter(id => id !== clip.id));
@@ -2378,14 +2428,14 @@ export default function Timeline({ height }: { height: number }) {
                           setSelectedClipIds([clip.id]);
                           setContextMenu({ x: e.clientX, y: e.clientY, clip, trackId: track.id });
                         }}
-                        onMouseDown={(e) => {
+                        onPointerDown={(e) => {
                           if (toolMode === 'razor') {
                             e.stopPropagation();
                             return;
                           }
                           handleClipMouseDown(e, track.id, clip, 'move');
                         }}
-                        onMouseMove={(e) => {
+                        onPointerMove={(e) => {
                           if (toolMode === 'razor') {
                             const rect = e.currentTarget.getBoundingClientRect();
                             const localX = e.clientX - rect.left;
@@ -2446,7 +2496,7 @@ export default function Timeline({ height }: { height: number }) {
                           isSelected
                             ? 'ring-2 ring-offset-0 ring-sky-400 border-sky-400/60 z-20 shadow-[0_0_12px_rgba(56,189,248,0.25)]'
                             : ''
-                        } ${clipBg} ${deactivatedClips.has(clip.id) ? 'opacity-40' : ''}`}
+                        } ${clipBg} ${deactivatedClips.has(clip.id) ? 'opacity-40' : ''} touch-none`}
                         style={{ left, width }}
                         title={clip.name}
                       >
@@ -2496,8 +2546,8 @@ export default function Timeline({ height }: { height: number }) {
 
                         {/* Left Trim Handle */}
                         <div
-                          onMouseDown={(e) => handleClipMouseDown(e, track.id, clip, 'trim-start')}
-                          className="absolute left-0 top-0 bottom-0 w-1.5 hover:w-2.5 bg-white/10 hover:bg-sky-400/80 cursor-col-resize transition-all z-20 rounded-l"
+                          onPointerDown={(e) => handleClipMouseDown(e, track.id, clip, 'trim-start')}
+                          className="absolute left-0 top-0 bottom-0 w-4 hover:w-5 md:w-1.5 md:hover:w-2.5 bg-white/10 hover:bg-sky-400/80 cursor-col-resize transition-all z-20 rounded-l touch-none"
                           title="Trim Start"
                         />
 
@@ -2648,8 +2698,8 @@ export default function Timeline({ height }: { height: number }) {
                           const isClipMuted = (clip.type === 'audio' && track.muted) || clip.volume === 0;
                           return (
                             <div
-                              onMouseDown={(e) => handleGainMouseDown(e, clip.id, clip.volume ?? 100)}
-                              className={`absolute left-0 right-0 h-[3px] cursor-ns-resize z-30 group/gain transition-colors ${
+                              onPointerDown={(e) => handleGainMouseDown(e, clip.id, clip.volume ?? 100)}
+                              className={`absolute left-0 right-0 h-[3px] cursor-ns-resize z-30 group/gain transition-colors touch-none ${
                                 isClipMuted ? 'bg-zinc-650/30 hover:bg-zinc-550/50' : 'bg-yellow-500/55 hover:bg-yellow-400'
                               }`}
                               style={{ bottom: `${bottomOffset}px` }}
@@ -2666,8 +2716,8 @@ export default function Timeline({ height }: { height: number }) {
 
                         {/* Right Trim Handle */}
                         <div
-                          onMouseDown={(e) => handleClipMouseDown(e, track.id, clip, 'trim-end')}
-                          className="absolute right-0 top-0 bottom-0 w-1.5 hover:w-2.5 bg-white/10 hover:bg-sky-400/80 cursor-col-resize transition-all z-20 rounded-r"
+                          onPointerDown={(e) => handleClipMouseDown(e, track.id, clip, 'trim-end')}
+                          className="absolute right-0 top-0 bottom-0 w-4 hover:w-5 md:w-1.5 md:hover:w-2.5 bg-white/10 hover:bg-sky-400/80 cursor-col-resize transition-all z-20 rounded-r touch-none"
                           title="Trim End"
                         />
                       </div>
@@ -2724,16 +2774,16 @@ export default function Timeline({ height }: { height: number }) {
 
                                {/* Left Resize Handle */}
                                <div
-                                 onMouseDown={(e) => handleTransitionResizeMouseDown(e, conn.currId, 'left', conn.transWidth / pxPerMs, conn.prevId)}
-                                 className="absolute top-1/2 -translate-y-1/2 w-1.5 h-9 hover:bg-sky-500/80 cursor-col-resize z-40 transition-colors"
+                                 onPointerDown={(e) => handleTransitionResizeMouseDown(e, conn.currId, 'left', conn.transWidth / pxPerMs, conn.prevId)}
+                                 className="absolute top-1/2 -translate-y-1/2 w-1.5 h-9 hover:bg-sky-500/80 cursor-col-resize z-40 transition-colors touch-none"
                                  style={{ left: `-${conn.transWidth / 2 - width / 2}px`, transform: 'translate(-50%, -50%)' }}
                                  title="Drag to adjust transition duration"
                                />
 
                                {/* Right Resize Handle */}
                                <div
-                                 onMouseDown={(e) => handleTransitionResizeMouseDown(e, conn.currId, 'right', conn.transWidth / pxPerMs, conn.prevId)}
-                                 className="absolute top-1/2 -translate-y-1/2 w-1.5 h-9 hover:bg-sky-500/80 cursor-col-resize z-40 transition-colors"
+                                 onPointerDown={(e) => handleTransitionResizeMouseDown(e, conn.currId, 'right', conn.transWidth / pxPerMs, conn.prevId)}
+                                 className="absolute top-1/2 -translate-y-1/2 w-1.5 h-9 hover:bg-sky-500/80 cursor-col-resize z-40 transition-colors touch-none"
                                  style={{ left: `${conn.transWidth / 2 + width / 2}px`, transform: 'translate(-50%, -50%)' }}
                                  title="Drag to adjust transition duration"
                                />

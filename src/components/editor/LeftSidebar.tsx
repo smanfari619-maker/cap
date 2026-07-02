@@ -643,7 +643,7 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
     <div 
       className="flex flex-col h-full bg-[#18181c] border-r border-[#2c2c32] text-gray-200 overflow-hidden select-none"
       style={{ 
-        width: window.innerWidth < 768 ? '100%' : width, 
+        width: window.innerWidth < 1024 ? '100%' : width, 
         display: width === 0 ? 'none' : 'flex' 
       }}
     >

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Edit2, Sparkles, Download, Loader2, CheckCircle2, Film, Music, Type, Smile, Scissors, Languages, Palette, Sliders, Users, Keyboard, Volume2, Timer, X, Trash2, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Edit2, Sparkles, Download, Loader2, CheckCircle2, Film, Music, Type, Smile, Scissors, Languages, Palette, Sliders, Users, Keyboard, Volume2, Timer, X, Trash2, ChevronDown, Zap } from 'lucide-react';
 import { useEditorStore } from '../../store/editorStore';
 import { db } from '../../lib/db';
 import LeftSidebar from './LeftSidebar';
@@ -57,10 +57,22 @@ export default function EditorLayout() {
   const [showMobileMediaPicker, setShowMobileMediaPicker] = useState(false);
 
   useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    const handleResize = () => setIsMobile(window.innerWidth < 1024);
     handleResize();
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+
+    const handleOpenProperties = () => {
+      if (window.innerWidth < 1024) {
+        setActiveTab('properties');
+        setShowMobileSheet(true);
+      }
+    };
+    window.addEventListener('open-mobile-properties', handleOpenProperties);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('open-mobile-properties', handleOpenProperties);
+    };
   }, []);
 
   // Resizable panel states
@@ -637,7 +649,7 @@ export default function EditorLayout() {
       </header>
 
       {/* Editor Content Area */}
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
         {/* Left Side: Media & Asset Sidebar (Desktop Only) */}
         {!isMobile && <LeftSidebar activeTab={activeTab} width={sidebarWidth} />}
 
@@ -770,6 +782,13 @@ export default function EditorLayout() {
               >
                 <Palette className="w-5 h-5" />
                 <span className="text-[9px] font-bold">Filters</span>
+              </button>
+              <button 
+                onClick={() => { setActiveTab('transitions'); setShowMobileSheet(true); }}
+                className="flex flex-col items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+              >
+                <Zap className="w-5 h-5 text-amber-400" />
+                <span className="text-[9px] font-bold">Transitions</span>
               </button>
               <button 
                 onClick={() => { if (confirm("Delete selected clip?")) { removeClip(selectedClipId); setSelectedClipId(null); } }}
