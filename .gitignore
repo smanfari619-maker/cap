@@ -30,3 +30,21 @@ dist-ssr
 *.pt
 **/gfpgan/weights/
 **/sadtalker/gfpgan/weights/
+
+# Backend specific ignores
+backend/venv/
+backend/.venv/
+backend/env/
+backend/models/
+backend/backend/models/
+backend/backend/lipsync/sadtalker/checkpoints/
+backend/backend/lipsync/sadtalker/gfpgan/weights/
+backend/tmp_result/
+backend/output/
+backend/dylib/
+backend/subtitle.ini
+backend/*_no_sub.mp4
+backend/demo*.mp4
+backend/out*.mp4
+backend/test_*.mp4
+backend/test*.py
