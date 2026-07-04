@@ -12,7 +12,6 @@ export default function ClipInspector({ width }: { width: number }) {
   const updateClip = useEditorStore(state => state.updateClip);
   const watermarkRegion = useEditorStore(state => state.watermarkRegion);
   const setWatermarkRegion = useEditorStore(state => state.setWatermarkRegion);
-  const currentTime = useEditorStore(state => state.currentTime);
 
   const [activeTab, setActiveTab] = useState<'video' | 'audio' | 'speed' | 'adjust' | 'effects'>('video');
   const [isDrawModalOpen, setIsDrawModalOpen] = useState(false);
@@ -1660,7 +1659,7 @@ export default function ClipInspector({ width }: { width: number }) {
       {isDrawModalOpen && currentAsset && (
         <WatermarkDrawModal
           asset={currentAsset}
-          initialTimeMs={(currentTime - selectedClip.positionMs) + selectedClip.trimStartMs}
+          initialTimeMs={(useEditorStore.getState().currentTime - selectedClip.positionMs) + selectedClip.trimStartMs}
           onClose={() => setIsDrawModalOpen(false)}
           onConfirm={(region) => {
             setWatermarkRegion(region);

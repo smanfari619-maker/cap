@@ -87,7 +87,8 @@ async function runBestPipeline(
       formData.append('file', file);
       formData.append('region', JSON.stringify(region || { x: 0, y: 0, w: vw, h: vh }));
 
-      const res = await fetch('http://localhost:8000/api/remove-watermark', {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${apiUrl}/api/remove-watermark`, {
         method: 'POST',
         body: formData,
       });

@@ -11,6 +11,7 @@ import { useEditorStore } from '../../store/editorStore';
 import { deleteDirectoryFromOPFS } from '../../lib/opfs';
 import jellycutLogo from '../../assets/jellycut_logo.svg';
 import WatermarkRemoverTool from './WatermarkRemoverTool';
+import LipSyncTool from './LipSyncTool';
 
 export default function Dashboard() {
   const loadProject = useEditorStore(state => state.loadProject);
@@ -37,6 +38,7 @@ export default function Dashboard() {
   // Mobile layout state
   const [mobileTab, setMobileTab] = useState<'edit' | 'templates' | 'inbox' | 'me'>('edit');
   const [showMobileWatermarkTool, setShowMobileWatermarkTool] = useState(false);
+  const [showMobileLipsyncTool, setShowMobileLipsyncTool] = useState(false);
   const [activeProjectMenuId, setActiveProjectMenuId] = useState<string | null>(null);
   const [projectToDeleteId, setProjectToDeleteId] = useState<string | null>(null);
 
@@ -516,6 +518,9 @@ export default function Dashboard() {
             {/* ── Gemini Watermark Remover Standalone Tool ── */}
             <WatermarkRemoverTool />
 
+            {/* ── Wav2Lip Offline Lipsync Standalone Tool ── */}
+            <LipSyncTool />
+
             {/* Live System Status Widget */}
             <div className="glass-panel rounded-2xl p-5 relative overflow-hidden">
               <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-wider mb-4 flex items-center gap-2">
@@ -671,7 +676,7 @@ export default function Dashboard() {
             {/* Watermark Remover Quick Tool Card */}
             <div 
               onClick={() => setShowMobileWatermarkTool(true)}
-              className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-4 mb-6 flex items-center justify-between cursor-pointer hover:border-violet-500/30 transition group"
+              className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-4 mb-3 flex items-center justify-between cursor-pointer hover:border-violet-500/30 transition group"
             >
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center group-hover:scale-105 transition">
@@ -680,6 +685,23 @@ export default function Dashboard() {
                 <div>
                   <h4 className="font-bold text-xs text-zinc-200">Gemini Watermark Remover</h4>
                   <p className="text-[10px] text-zinc-500 mt-0.5">Scan and erase video watermarks automatically</p>
+                </div>
+              </div>
+              <span className="text-zinc-500 group-hover:text-zinc-300 transition text-xs font-semibold mr-1">&gt;</span>
+            </div>
+
+            {/* Wav2Lip Lipsync Quick Tool Card */}
+            <div 
+              onClick={() => setShowMobileLipsyncTool(true)}
+              className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-4 mb-6 flex items-center justify-between cursor-pointer hover:border-violet-500/30 transition group"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-violet-500/10 text-violet-400 flex items-center justify-center group-hover:scale-105 transition">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-xs text-zinc-200">Wav2Lip Offline Lipsync</h4>
+                  <p className="text-[10px] text-zinc-500 mt-0.5">Sync face portraits to spoken voice clips locally</p>
                 </div>
               </div>
               <span className="text-zinc-500 group-hover:text-zinc-300 transition text-xs font-semibold mr-1">&gt;</span>
@@ -1073,6 +1095,25 @@ export default function Dashboard() {
             </button>
           </div>
           <WatermarkRemoverTool />
+        </div>
+      )}
+
+      {/* Mobile Lipsync Full Screen Overlay */}
+      {showMobileLipsyncTool && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950 p-4 pb-12">
+          <div className="flex justify-between items-center mb-4 pb-2 border-b border-zinc-850">
+            <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-violet-400" />
+              Wav2Lip Offline Lipsync
+            </h3>
+            <button 
+              onClick={() => setShowMobileLipsyncTool(false)}
+              className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-400"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <LipSyncTool />
         </div>
       )}
 

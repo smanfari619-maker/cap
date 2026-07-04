@@ -10,13 +10,16 @@ import { buildEffectFilterString, applyCanvasEffect } from '../../lib/effects-re
 
 export default function VideoPreview() {
   const project = useEditorStore(state => state.project);
-  const currentTime = useEditorStore(state => state.currentTime);
   const setCurrentTime = useEditorStore(state => state.setCurrentTime);
   const isPlaying = useEditorStore(state => state.isPlaying);
   const setIsPlaying = useEditorStore(state => state.setIsPlaying);
   const upscaleEnabled = useEditorStore(state => state.upscaleEnabled);
   const selectedClipId = useEditorStore(state => state.selectedClipId);
 
+  
+  const scrubberRef = useRef<HTMLInputElement>(null);
+  const mobileTimecodeRef = useRef<HTMLSpanElement>(null);
+  const desktopTimecodeRef = useRef<HTMLSpanElement>(null);
   const [isEditingTimecode, setIsEditingTimecode] = useState(false);
   const [timecodeInputVal, setTimecodeInputVal] = useState('');
   const updateClip = useEditorStore(state => state.updateClip);
@@ -291,120 +294,102 @@ export default function VideoPreview() {
   }, [project]);
 
   // 4. Synchronize HTML Media Elements playback states and current times
+
   useEffect(() => {
-    if (!project || !assetsLoaded) return;
+    let lastTime = -1;
+    const unsubscribe = useEditorStore.subscribe((state) => {
+      const time = state.currentTime;
+      if (time === lastTime) return;
+      lastTime = time;
 
-    // Wake up Web Audio context on playback start
-    if (isPlaying) {
-      getAudioContext();
-    }
+      // --- UI Updates ---
+      if (scrubberRef.current) {
+        scrubberRef.current.value = time.toString();
+      }
+      const timecode = formatTimecode(time);
+      if (mobileTimecodeRef.current) mobileTimecodeRef.current.textContent = timecode;
+      if (desktopTimecodeRef.current) desktopTimecodeRef.current.textContent = timecode;
 
-    project.tracks.forEach(track => {
-      track.clips.forEach(clip => {
-        if (!clip.assetId || clip.type === 'image') return;
-        const media = mediaElementsRef.current.get(`${clip.id}_${clip.assetId}`);
-        if (!media) return;
+      // --- Media Syncing ---
+      const proj = useEditorStore.getState().project;
+      const isPlay = useEditorStore.getState().isPlaying;
+      if (!proj || !assetsLoaded) return;
 
-        const isClipActive = currentTime >= clip.positionMs && currentTime < clip.positionMs + clip.durationMs;
-        const key = `${clip.id}_${clip.assetId}`;
+      if (isPlay) getAudioContext();
 
-        if (isClipActive) {
-          // Setup audio filters routing
-          setupAudioRouting(key, media);
+      proj.tracks.forEach(track => {
+        track.clips.forEach(clip => {
+          if (!clip.assetId || clip.type === 'image') return;
+          const media = mediaElementsRef.current.get(`${clip.id}_${clip.assetId}`);
+          if (!media) return;
 
-          // Synchronize audio Equalizer settings
-          const nodes = audioNodesRef.current.get(key);
-          if (nodes) {
-            const lowGain = clip.audioEQ?.low ?? 0;
-            const midGain = clip.audioEQ?.mid ?? 0;
-            const highGain = clip.audioEQ?.high ?? 0;
+          const isClipActive = time >= clip.positionMs && time < clip.positionMs + clip.durationMs;
+          const key = `${clip.id}_${clip.assetId}`;
 
-            if (nodes.lowFilter.gain.value !== lowGain) nodes.lowFilter.gain.value = lowGain;
-            if (nodes.midFilter.gain.value !== midGain) nodes.midFilter.gain.value = midGain;
-            if (nodes.highFilter.gain.value !== highGain) nodes.highFilter.gain.value = highGain;
-          }
+          if (isClipActive) {
+            setupAudioRouting(key, media);
+            const nodes = audioNodesRef.current.get(key);
+            if (nodes) {
+              const lowGain = clip.audioEQ?.low ?? 0;
+              const midGain = clip.audioEQ?.mid ?? 0;
+              const highGain = clip.audioEQ?.high ?? 0;
+              if (nodes.lowFilter.gain.value !== lowGain) nodes.lowFilter.gain.value = lowGain;
+              if (nodes.midFilter.gain.value !== midGain) nodes.midFilter.gain.value = midGain;
+              if (nodes.highFilter.gain.value !== highGain) nodes.highFilter.gain.value = highGain;
+            }
 
-          const speed = clip.speed || 1.0;
-          const clipOffset = currentTime - clip.positionMs;
-          const targetSourceTime = (clip.trimStartMs + (clipOffset * speed)) / 1000;
+            const speed = clip.speed || 1.0;
+            const clipOffset = time - clip.positionMs;
+            const targetSourceTime = (clip.trimStartMs + (clipOffset * speed)) / 1000;
 
-          // Sync playback speed
-          if (media.playbackRate !== speed) {
-            media.playbackRate = speed;
-          }
+            if (media.playbackRate !== speed) media.playbackRate = speed;
+            const isMuted = !!track.muted;
+            if (media.muted !== isMuted) media.muted = isMuted;
 
-          // Sync mute state
-          const isMuted = !!track.muted;
-          if (media.muted !== isMuted) {
-            media.muted = isMuted;
-          }
+            let volumeFactor = 1.0;
+            const fadeIn = clip.fadeInMs || 0;
+            const fadeOut = clip.fadeOutMs || 0;
+            if (clipOffset < fadeIn && fadeIn > 0) {
+              volumeFactor = clipOffset / fadeIn;
+            } else if (clipOffset > clip.durationMs - fadeOut && fadeOut > 0) {
+              volumeFactor = (clip.positionMs + clip.durationMs - time) / fadeOut;
+            }
+            const baseVolume = clip.volume !== undefined ? clip.volume / 100 : 1.0;
+            const calculatedVolume = Math.max(0, Math.min(volumeFactor * baseVolume, 1.0));
+            if (media.volume !== calculatedVolume) media.volume = calculatedVolume;
 
-          // Sync volume
-          let volumeFactor = 1.0;
-          const fadeIn = clip.fadeInMs || 0;
-          const fadeOut = clip.fadeOutMs || 0;
-          if (clipOffset < fadeIn && fadeIn > 0) {
-            volumeFactor = clipOffset / fadeIn;
-          } else if (clipOffset > clip.durationMs - fadeOut && fadeOut > 0) {
-            volumeFactor = (clip.positionMs + clip.durationMs - currentTime) / fadeOut;
-          }
-          const baseVolume = clip.volume !== undefined ? clip.volume / 100 : 1.0;
-          const calculatedVolume = Math.max(0, Math.min(volumeFactor * baseVolume, 1.0));
-          if (media.volume !== calculatedVolume) {
-            media.volume = calculatedVolume;
-          }
-
-          // Playback sync logic
-          if (isPlaying) {
-            // Cancel any pending scrub seek when playback starts
-            (media as any)._pendingSeek = undefined;
-
-            const isReallyPlaying = !media.paused || (media as any)._playPending;
-
-            if (!isReallyPlaying) {
-              (media as any)._playPending = true;
-              media.currentTime = targetSourceTime;
-              
-              media.play()
-                .then(() => {
-                  (media as any)._playPending = false;
-                })
-                .catch((err) => {
-                  console.warn("Play failed or interrupted:", err);
-                  (media as any)._playPending = false;
-                });
-            } else {
-              // Only force seek during playback if drift is very large (> 1.5 seconds)
-              // to prevent the HTML5 decoder from stuttering or freezing.
-              const drift = Math.abs(media.currentTime - targetSourceTime);
-              if (drift > 1.5 && !media.seeking) {
+            if (isPlay) {
+              (media as any)._pendingSeek = undefined;
+              const isReallyPlaying = !media.paused || (media as any)._playPending;
+              if (!isReallyPlaying) {
+                (media as any)._playPending = true;
                 media.currentTime = targetSourceTime;
+                media.play().then(() => { (media as any)._playPending = false; }).catch(() => { (media as any)._playPending = false; });
+              } else {
+                const drift = Math.abs(media.currentTime - targetSourceTime);
+                if (drift > 1.5 && !(media as any).seeking) media.currentTime = targetSourceTime;
+              }
+            } else {
+              (media as any)._playPending = false;
+              if (!media.paused) media.pause();
+              const drift = Math.abs(media.currentTime - targetSourceTime);
+              if (drift > 0.03) {
+                if ((media as any).seeking) {
+                  (media as any)._pendingSeek = targetSourceTime;
+                } else {
+                  media.currentTime = targetSourceTime;
+                }
               }
             }
           } else {
-            // When scrubbing (paused), always sync current frame for visual feedback
-            (media as any)._playPending = false;
-            if (!media.paused) {
-              media.pause();
-            }
-            const drift = Math.abs(media.currentTime - targetSourceTime);
-            if (drift > 0.03) { // tight threshold for responsive scrubbing
-              if (media.seeking) {
-                (media as any)._pendingSeek = targetSourceTime;
-              } else {
-                media.currentTime = targetSourceTime;
-              }
-            }
+            if (!media.paused) media.pause();
           }
-        } else {
-          // Pause if clip is inactive (completely isolated since elements are clip-keyed)
-          if (!media.paused) {
-            media.pause();
-          }
-        }
+        });
       });
     });
-  }, [currentTime, isPlaying, project, assetsLoaded]);
+    return () => unsubscribe();
+  }, [assetsLoaded]);
+
 
   const drawRef = useRef<() => void>(() => {});
 
@@ -1057,7 +1042,7 @@ export default function VideoPreview() {
     if (!isPlaying) {
       drawRef.current();
     }
-  }, [currentTime, isPlaying]);
+  }, [isPlaying]);
 
   // Precise delta-time clock to drive currentTime progression smoothly at 60fps
   useEffect(() => {
@@ -1226,7 +1211,7 @@ export default function VideoPreview() {
   const stepFrame = (dir: number) => {
     if (!project) return;
     const frameTime = 1000 / (project.fps || 30);
-    setCurrentTime(Math.max(0, Math.min(totalDuration, currentTime + dir * frameTime)));
+    setCurrentTime(Math.max(0, Math.min(totalDuration, useEditorStore.getState().currentTime + dir * frameTime)));
   };
 
   const handleFullscreen = () => {
@@ -1356,16 +1341,17 @@ export default function VideoPreview() {
         {/* Scrubber Slider & Mobile Timecode Row */}
         <div className="flex items-center justify-between gap-3 w-full px-1.5">
           <input
+            ref={scrubberRef}
             type="range"
             min={0}
             max={totalDuration}
-            value={currentTime}
+            defaultValue={0}
             onChange={(e) => setCurrentTime(Number(e.target.value))}
             className="flex-1 h-1 bg-[#121214] rounded-lg appearance-none cursor-pointer accent-sky-500 focus:outline-none"
           />
           {/* Mobile Only Inline Timecode */}
           <div className="md:hidden text-[9px] font-mono text-zinc-400 shrink-0 select-none">
-            <span>{formatTimecode(currentTime)}</span>
+            <span ref={mobileTimecodeRef}>{formatTimecode(useEditorStore.getState().currentTime)}</span>
             <span className="text-zinc-650 mx-0.5">/</span>
             <span className="text-zinc-550">{formatTimecode(totalDuration)}</span>
           </div>
@@ -1405,12 +1391,13 @@ export default function VideoPreview() {
               <span
                 onClick={() => {
                   setIsEditingTimecode(true);
-                  setTimecodeInputVal(formatTimecode(currentTime));
+                  setTimecodeInputVal(formatTimecode(useEditorStore.getState().currentTime));
                 }}
                 className="text-gray-250 font-medium hover:text-sky-400 cursor-pointer transition select-none"
                 title="Click to input timestamp"
+                ref={desktopTimecodeRef}
               >
-                {formatTimecode(currentTime)}
+                {formatTimecode(useEditorStore.getState().currentTime)}
               </span>
             )}
             <span className="text-gray-600">/</span>

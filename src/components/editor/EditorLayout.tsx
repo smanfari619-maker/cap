@@ -29,7 +29,6 @@ export default function EditorLayout() {
   const setCurrentTime = useEditorStore(state => state.setCurrentTime);
   const setIsPlaying = useEditorStore(state => state.setIsPlaying);
   const isPlaying = useEditorStore(state => state.isPlaying);
-  const currentTime = useEditorStore(state => state.currentTime);
   const zoom = useEditorStore(state => state.zoom);
   const setZoom = useEditorStore(state => state.setZoom);
   const selectedClipId = useEditorStore(state => state.selectedClipId);
@@ -208,10 +207,10 @@ export default function EditorLayout() {
       // Arrow scrub: frame-step 33ms, shift = 1s
       else if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        setCurrentTime(Math.max(0, currentTime - (e.shiftKey ? 1000 : 33)));
+        setCurrentTime(Math.max(0, useEditorStore.getState().currentTime - (e.shiftKey ? 1000 : 33)));
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        setCurrentTime(currentTime + (e.shiftKey ? 1000 : 33));
+        setCurrentTime(useEditorStore.getState().currentTime + (e.shiftKey ? 1000 : 33));
       }
       // Bracket zoom [ and ]
       else if (e.key === '[') {
@@ -275,7 +274,7 @@ export default function EditorLayout() {
             const pastedClip = {
               ...source,
               id: newClipId,
-              positionMs: currentTime,
+              positionMs: useEditorStore.getState().currentTime,
               trackId: pasteTrack.id
             };
             addClip(pasteTrack.id, pastedClip);
@@ -310,7 +309,7 @@ export default function EditorLayout() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, isPlaying, setIsPlaying, currentTime, setCurrentTime, zoom, setZoom, selectedClipId, selectedClipIds, setSelectedClipId, setSelectedClipIds, removeClip, addClip, splitClipAtPlayhead, project]);
+  }, [undo, redo, isPlaying, setIsPlaying, setCurrentTime, zoom, setZoom, selectedClipId, selectedClipIds, setSelectedClipId, setSelectedClipIds, removeClip, addClip, splitClipAtPlayhead, project]);
 
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [projectTitle, setProjectTitle] = useState('');
@@ -986,7 +985,7 @@ export default function EditorLayout() {
                   durationMs: asset.durationMs,
                   trimStartMs: 0,
                   trimEndMs: asset.durationMs,
-                  positionMs: currentTime,
+                  positionMs: useEditorStore.getState().currentTime,
                   speed: 1.0,
                   volume: 100,
                   fadeInMs: 0,

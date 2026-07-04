@@ -9,7 +9,6 @@ import { getMediaMetadata } from '../../lib/media-metadata';
 export default function UploadZone() {
   const currentProjectId = useEditorStore(state => state.currentProjectId);
   const addClip = useEditorStore(state => state.addClip);
-  const currentTime = useEditorStore(state => state.currentTime);
   const project = useEditorStore(state => state.project);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -84,7 +83,7 @@ export default function UploadZone() {
       durationMs: asset.durationMs,
       trimStartMs: 0,
       trimEndMs: asset.durationMs,
-      positionMs: currentTime
+      positionMs: useEditorStore.getState().currentTime
     };
 
     await addClip(track.id, newClip);

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { X, ChevronDown, Loader2, Upload } from 'lucide-react';
+import { X, ChevronDown, Loader2, Upload, Music } from 'lucide-react';
 import { db, type Asset } from '../../lib/db';
 import { useEditorStore } from '../../store/editorStore';
 import { saveFileToOPFS } from '../../lib/opfs';
@@ -15,7 +15,7 @@ export default function MobileMediaPicker({ onClose, onAdd }: MobileMediaPickerP
   const currentProjectId = useEditorStore(state => state.currentProjectId);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [activeTab, setActiveTab] = useState<'video' | 'photo'>('video');
+  const [activeTab, setActiveTab] = useState<'video' | 'photo' | 'audio'>('video');
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({});
@@ -30,6 +30,7 @@ export default function MobileMediaPicker({ onClose, onAdd }: MobileMediaPickerP
   const filteredAssets = assets.filter(asset => {
     if (activeTab === 'video') return asset.type.startsWith('video/');
     if (activeTab === 'photo') return asset.type.startsWith('image/');
+    if (activeTab === 'audio') return asset.type.startsWith('audio/');
     return false;
   });
 
@@ -202,6 +203,7 @@ export default function MobileMediaPicker({ onClose, onAdd }: MobileMediaPickerP
         {[
           { id: 'video', label: 'Videos' },
           { id: 'photo', label: 'Photos' },
+          { id: 'audio', label: 'Audio' },
         ].map(tab => (
           <button
             key={tab.id}
@@ -249,7 +251,12 @@ export default function MobileMediaPicker({ onClose, onAdd }: MobileMediaPickerP
                   onClick={() => toggleSelect(asset.id)}
                   className="aspect-square bg-zinc-900 border border-zinc-850 rounded-lg relative overflow-hidden group cursor-pointer active:scale-95 transition-transform duration-100"
                 >
-                  {thumbnail ? (
+                  {asset.type.startsWith('audio/') ? (
+                    <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-900 border border-zinc-800">
+                      <Music className="w-6 h-6 text-zinc-600 mb-1" />
+                      <span className="text-[9px] text-zinc-500 max-w-full truncate px-1">{asset.name}</span>
+                    </div>
+                  ) : thumbnail ? (
                     <img src={thumbnail} className="w-full h-full object-cover" alt="" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-[10px] text-zinc-650 bg-zinc-950">
@@ -291,7 +298,7 @@ export default function MobileMediaPicker({ onClose, onAdd }: MobileMediaPickerP
               type="file"
               ref={fileInputRef}
               multiple
-              accept={activeTab === 'video' ? 'video/*' : 'image/*'}
+              accept={activeTab === 'video' ? 'video/*' : activeTab === 'photo' ? 'image/*' : 'audio/*,audio/mp3,audio/wav,audio/m4a,.mp3,.wav,.m4a'}
               onChange={handleFileChange}
               className="hidden"
             />

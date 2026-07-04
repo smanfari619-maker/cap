@@ -19,7 +19,6 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
   const addClip = useEditorStore(state => state.addClip);
   const addTrack = useEditorStore(state => state.addTrack);
   const updateClip = useEditorStore(state => state.updateClip);
-  const currentTime = useEditorStore(state => state.currentTime);
   const project = useEditorStore(state => state.project);
   const selectedClipId = useEditorStore(state => state.selectedClipId);
   const setSelectedClipId = useEditorStore(state => state.setSelectedClipId);
@@ -410,7 +409,7 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
       durationMs: asset.durationMs,
       trimStartMs: 0,
       trimEndMs: asset.durationMs,
-      positionMs: currentTime,
+      positionMs: useEditorStore.getState().currentTime,
       speed: 1.0,
       volume: 100,
       fadeInMs: 0,
@@ -476,7 +475,7 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
       durationMs: 4000,
       trimStartMs: 0,
       trimEndMs: 4000,
-      positionMs: currentTime,
+      positionMs: useEditorStore.getState().currentTime,
       textSettings: {
         content,
         color,
@@ -504,7 +503,7 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
       durationMs: 4000,
       trimStartMs: 0,
       trimEndMs: 4000,
-      positionMs: currentTime,
+      positionMs: useEditorStore.getState().currentTime,
       textSettings: {
         content: emoji,
         color: '#ffffff',
@@ -572,7 +571,7 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
       durationMs: 3000, // 3 seconds
       trimStartMs: 0,
       trimEndMs: 0,
-      positionMs: currentTime, // at playhead!
+      positionMs: useEditorStore.getState().currentTime, // at playhead!
       trackId: effectTrack.id,
       videoEffects: [{ id: effectId, intensity }]
     };
@@ -620,7 +619,7 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
       durationMs: 3000,
       trimStartMs: 0,
       trimEndMs: 0,
-      positionMs: currentTime,
+      positionMs: useEditorStore.getState().currentTime,
       trackId: effectTrack.id,
       filterSettings: {
         type,
@@ -1561,7 +1560,7 @@ export default function LeftSidebar({ activeTab, width }: LeftSidebarProps) {
                         durationMs: 5000,
                         trimStartMs: 0,
                         trimEndMs: 5000,
-                        positionMs: currentTime
+                        positionMs: useEditorStore.getState().currentTime
                       });
                     }}
                     className="flex flex-col items-center justify-center p-4 bg-[#121214] border border-[#2c2c32] hover:border-sky-500 rounded text-center transition cursor-pointer"
