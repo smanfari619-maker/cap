@@ -16,6 +16,7 @@ export default function LipSyncTool() {
   const [status, setStatus] = useState<'idle' | 'processing' | 'success' | 'error'>('idle');
   const [statusText, setStatusText] = useState<string>('');
   const [progressStep, setProgressStep] = useState<number>(0);
+  const [progressPercent, setProgressPercent] = useState<number>(0);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [isMissingModels, setIsMissingModels] = useState<boolean>(false);
   const [resultVideoUrl, setResultVideoUrl] = useState<string | null>(null);
@@ -56,6 +57,7 @@ export default function LipSyncTool() {
 
     setStatus('processing');
     setProgressStep(0);
+    setProgressPercent(0);
     const stepsList = getSteps();
     setStatusText(stepsList[0]);
     setIsMissingModels(false);
@@ -70,7 +72,14 @@ export default function LipSyncTool() {
         }
         return prev;
       });
-    }, 4500);
+    }, 7500);
+
+    const percentInterval = setInterval(() => {
+      setProgressPercent((prev) => {
+        if (prev >= 98) return 98;
+        return prev + 1;
+      });
+    }, 550);
 
     try {
       const formData = new FormData();
@@ -86,6 +95,7 @@ export default function LipSyncTool() {
       });
 
       clearInterval(stepInterval);
+      clearInterval(percentInterval);
 
       if (!response.ok) {
         throw new Error(`Server returned status: ${response.status}`);
@@ -112,9 +122,11 @@ export default function LipSyncTool() {
 
       const videoUrl = URL.createObjectURL(blob);
       setResultVideoUrl(videoUrl);
+      setProgressPercent(100);
       setStatus('success');
     } catch (err: any) {
       clearInterval(stepInterval);
+      clearInterval(percentInterval);
       setStatus('error');
       setErrorMsg(err.message || 'An unknown error occurred during processing.');
       console.error('[Lipsync] Error:', err);
@@ -304,20 +316,20 @@ export default function LipSyncTool() {
             {statusText}
           </p>
 
-          {/* Progress Blocks */}
-          <div className="flex gap-1 mt-4">
-            {activeSteps.map((_, i) => (
+          {/* Progress Bar */}
+          <div className="w-full max-w-[240px] mt-4">
+            <div className="flex justify-between items-center mb-1.5 px-1">
+              <span className="text-[10px] text-zinc-400 font-medium">Processing Status</span>
+              <span className="text-[10px] text-violet-400 font-bold">{progressPercent}%</span>
+            </div>
+            <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden border border-zinc-800">
               <div 
-                key={i} 
-                className={`w-3.5 h-1.5 rounded-full transition-all duration-300 ${
-                  i < progressStep 
-                    ? 'bg-violet-500' 
-                    : i === progressStep 
-                      ? 'bg-violet-400 animate-pulse' 
-                      : 'bg-zinc-800'
-                }`}
-              />
-            ))}
+                className="h-full bg-violet-500 rounded-full transition-all duration-300 ease-out relative"
+                style={{ width: `${progressPercent}%` }}
+              >
+                <div className="absolute top-0 right-0 bottom-0 left-0 bg-white/20 animate-pulse" />
+              </div>
+            </div>
           </div>
         </div>
       )}
