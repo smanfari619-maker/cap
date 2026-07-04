@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# AI Model checkpoints and weights
+*.pth
+*.safetensors
+*.ckpt
+*.pt
+**/gfpgan/weights/
+**/sadtalker/gfpgan/weights/
