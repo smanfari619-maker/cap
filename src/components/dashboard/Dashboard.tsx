@@ -518,7 +518,7 @@ export default function Dashboard() {
             {/* ── Gemini Watermark Remover Standalone Tool ── */}
             <WatermarkRemoverTool />
 
-            {/* ── Wav2Lip Offline Lipsync Standalone Tool ── */}
+            {/* ── Jellycut 3D AI Avatar Standalone Tool ── */}
             <LipSyncTool />
 
             {/* Live System Status Widget */}
@@ -700,7 +700,7 @@ export default function Dashboard() {
                   <Sparkles className="w-5 h-5" />
                 </div>
                 <div>
-                  <h4 className="font-bold text-xs text-zinc-200">Wav2Lip Offline Lipsync</h4>
+                  <h4 className="font-bold text-xs text-zinc-200">Jellycut 3D AI Avatar</h4>
                   <p className="text-[10px] text-zinc-500 mt-0.5">Sync face portraits to spoken voice clips locally</p>
                 </div>
               </div>
@@ -1104,7 +1104,7 @@ export default function Dashboard() {
           <div className="flex justify-between items-center mb-4 pb-2 border-b border-zinc-850">
             <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-violet-400" />
-              Wav2Lip Offline Lipsync
+              Jellycut 3D AI Avatar
             </h3>
             <button 
               onClick={() => setShowMobileLipsyncTool(false)}

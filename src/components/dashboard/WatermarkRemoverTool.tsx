@@ -10,9 +10,11 @@
  *   - MediaRecorder on output canvas for the final video blob
  */
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Upload, Download, ImageIcon, Video, Sparkles,
-  CheckCircle, AlertCircle, Loader2, RefreshCw, X
+  CheckCircle, AlertCircle, Loader2, RefreshCw, X,
+  Paintbrush, Hand, ZoomIn, ZoomOut
 } from 'lucide-react';
 import { removeWatermarkFromVideoFile, removeWatermarkFromImageDataSync } from '../../lib/watermark';
 
@@ -466,6 +468,16 @@ function DashboardDrawModal({ file, isVideo, onClose, onConfirm }: DashboardDraw
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasDrawn, setHasDrawn] = useState(false);
 
+  // Zoom & Pan States
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [activeTool, setActiveTool] = useState<'draw' | 'pan'>('draw');
+  const [isSpacePressed, setIsSpacePressed] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [brushSize, setBrushSize] = useState(15);
+
   useEffect(() => {
     const url = URL.createObjectURL(file);
     setFileURL(url);
@@ -500,63 +512,148 @@ function DashboardDrawModal({ file, isVideo, onClose, onConfirm }: DashboardDraw
     
     const observer = new ResizeObserver(() => {
       if (mediaRef.current && canvasRef.current) {
-        canvasRef.current.width = mediaRef.current.clientWidth;
-        canvasRef.current.height = mediaRef.current.clientHeight;
+        const w = mediaRef.current.clientWidth;
+        const h = mediaRef.current.clientHeight;
+        if (canvasRef.current.width !== w || canvasRef.current.height !== h) {
+          canvasRef.current.width = w;
+          canvasRef.current.height = h;
+        }
         
         const ctx = canvasRef.current.getContext('2d');
         if (ctx) {
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
-          ctx.lineWidth = 15;
+          ctx.lineWidth = brushSize;
           ctx.strokeStyle = 'rgba(139, 92, 246, 0.7)'; // Violet-500
         }
       }
     });
     
     observer.observe(mediaRef.current);
-    return () => observer.disconnect();
-  }, [naturalWidth, naturalHeight, isLoaded]);
-
-  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    setIsDrawing(true);
-    setHasDrawn(true);
-  };
-
-  const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    ctx.lineTo(x, y);
-    ctx.stroke();
-  };
-
-  const stopDrawing = () => {
-    if (!isDrawing) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
     
-    ctx.closePath();
-    setIsDrawing(false);
+    // Immediate config without resizing to prevent clear
+    const ctx = canvasRef.current.getContext('2d');
+    if (ctx) {
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = brushSize;
+      ctx.strokeStyle = 'rgba(139, 92, 246, 0.7)';
+    }
+
+    return () => observer.disconnect();
+  }, [naturalWidth, naturalHeight, isLoaded, brushSize]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+          e.preventDefault();
+          if (!e.repeat) {
+            setIsSpacePressed(true);
+          }
+        }
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setIsSpacePressed(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
+
+  // Recenter automatically if zoom is reset to 1
+  useEffect(() => {
+    if (zoom === 1) {
+      setPan({ x: 0, y: 0 });
+    }
+  }, [zoom]);
+
+  // Non-passive wheel event listener to handle zoom cleanly on trackpads/scroll-wheels
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    const preventDefaultWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomDelta = e.deltaY < 0 ? 0.25 : -0.25;
+      setZoom(prev => Math.min(5, Math.max(1, prev + zoomDelta)));
+    };
+
+    viewport.addEventListener('wheel', preventDefaultWheel, { passive: false });
+    return () => {
+      viewport.removeEventListener('wheel', preventDefaultWheel);
+    };
+  }, []);
+
+  const currentTool = isSpacePressed ? 'pan' : activeTool;
+
+  const startDrawingOrPanning = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (currentTool === 'pan') {
+      setIsPanning(true);
+      dragStartRef.current = { x: e.clientX, y: e.clientY };
+    } else {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
+      const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
+
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      setIsDrawing(true);
+      setHasDrawn(true);
+    }
+  };
+
+  const drawOrPan = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (currentTool === 'pan') {
+      if (!isPanning) return;
+      const dx = e.clientX - dragStartRef.current.x;
+      const dy = e.clientY - dragStartRef.current.y;
+      dragStartRef.current = { x: e.clientX, y: e.clientY };
+      setPan(prev => ({
+        x: prev.x + dx / zoom,
+        y: prev.y + dy / zoom
+      }));
+    } else {
+      if (!isDrawing) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
+      const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
+
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+  };
+
+  const stopDrawingOrPanning = () => {
+    if (currentTool === 'pan') {
+      setIsPanning(false);
+    } else {
+      if (!isDrawing) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      
+      ctx.closePath();
+      setIsDrawing(false);
+    }
   };
 
   const clearCanvas = () => {
@@ -624,9 +721,9 @@ function DashboardDrawModal({ file, isVideo, onClose, onConfirm }: DashboardDraw
     onConfirm({ x: minX, y: minY, w, h, maskData });
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
-      <div className="relative w-full max-w-4xl p-6 bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
+      <div className="relative w-full max-w-4xl p-4 sm:p-6 bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
 
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-zinc-900 mb-4 shrink-0">
@@ -640,7 +737,100 @@ function DashboardDrawModal({ file, isVideo, onClose, onConfirm }: DashboardDraw
         </div>
 
         {/* Media Container */}
-        <div className="flex-1 flex items-center justify-center bg-black rounded-lg border border-zinc-900 p-2 min-h-[150px] relative overflow-hidden">
+        <div 
+          ref={viewportRef}
+          style={{ backgroundColor: '#000000' }}
+          className="flex-1 flex items-center justify-center rounded-lg border border-zinc-900 p-2 min-h-[150px] relative overflow-hidden select-none"
+        >
+          {/* Floating Toolbar Overlay */}
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-25 flex items-center gap-1.5 p-1.5 bg-zinc-950/85 border border-zinc-800 rounded-xl backdrop-blur-md shadow-lg select-none">
+            {/* Draw mode */}
+            <button
+              onClick={() => setActiveTool('draw')}
+              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                currentTool === 'draw'
+                  ? 'bg-violet-600 text-white'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+              }`}
+              title="Draw Mode (B)"
+            >
+              <Paintbrush className="w-4 h-4" />
+            </button>
+            
+            {/* Pan mode */}
+            <button
+              onClick={() => setActiveTool('pan')}
+              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                currentTool === 'pan'
+                  ? 'bg-violet-600 text-white'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+              }`}
+              title="Pan Mode (Hold Spacebar)"
+            >
+              <Hand className="w-4 h-4" />
+            </button>
+
+            {currentTool === 'draw' && (
+              <>
+                <div className="w-px h-4 bg-zinc-800 mx-1" />
+                <div className="flex items-center gap-1.5 px-1">
+                  <span className="text-[9px] font-bold text-zinc-500 font-mono">Brush:</span>
+                  <input
+                    type="range"
+                    min="4"
+                    max="50"
+                    value={brushSize}
+                    onChange={(e) => setBrushSize(Number(e.target.value))}
+                    className="w-16 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                    title="Brush Size"
+                  />
+                  <span className="text-[9px] font-bold font-mono text-zinc-300 min-w-[22px] text-right">
+                    {brushSize}px
+                  </span>
+                </div>
+              </>
+            )}
+
+            <div className="w-px h-4 bg-zinc-800 mx-1" />
+
+            {/* Zoom Out */}
+            <button
+              onClick={() => setZoom(prev => Math.max(1, prev - 0.25))}
+              disabled={zoom <= 1}
+              className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 disabled:opacity-30 disabled:hover:text-zinc-400 disabled:hover:bg-transparent transition-colors cursor-pointer"
+              title="Zoom Out"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </button>
+
+            {/* Zoom Value */}
+            <span className="text-[10px] font-bold font-mono px-1.5 text-zinc-300 min-w-[36px] text-center">
+              {Math.round(zoom * 100)}%
+            </span>
+
+            {/* Zoom In */}
+            <button
+              onClick={() => setZoom(prev => Math.min(5, prev + 0.25))}
+              disabled={zoom >= 5}
+              className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 disabled:opacity-30 disabled:hover:text-zinc-400 disabled:hover:bg-transparent transition-colors cursor-pointer"
+              title="Zoom In"
+            >
+              <ZoomIn className="w-4 h-4" />
+            </button>
+
+            {/* Reset */}
+            <button
+              onClick={() => {
+                setZoom(1);
+                setPan({ x: 0, y: 0 });
+              }}
+              className="p-1.5 rounded-lg text-zinc-400 hover:text-red-400 hover:bg-zinc-900 transition-colors cursor-pointer"
+              title="Reset View"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
+
           {!isLoaded && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
               <RefreshCw className="w-6 h-6 text-zinc-500 animate-spin" />
@@ -649,13 +839,19 @@ function DashboardDrawModal({ file, isVideo, onClose, onConfirm }: DashboardDraw
           )}
 
           {fileURL && (
-            <div className={`relative inline-block max-w-full max-h-[60vh] ${isLoaded ? 'opacity-100' : 'opacity-0 absolute pointer-events-none'}`}>
+            <div 
+              style={{
+                transform: `scale(${zoom}) translate(${pan.x}px, ${pan.y}px)`,
+                transformOrigin: 'center center',
+              }}
+              className={`relative inline-block max-w-full max-h-full sm:max-h-[55vh] lg:max-h-[60vh] transition-transform duration-75 select-none ${isLoaded ? 'opacity-100' : 'opacity-0 absolute pointer-events-none'}`}
+            >
               {isVideo ? (
                 <video
                   ref={el => { mediaRef.current = el; }}
                   src={fileURL}
                   onLoadedMetadata={handleLoadedMetadata}
-                  className="max-w-full max-h-[60vh] block rounded pointer-events-none object-contain select-none"
+                  className="max-w-full max-h-full sm:max-h-[55vh] lg:max-h-[60vh] block rounded pointer-events-none object-contain select-none"
                   muted
                   playsInline
                   preload="auto"
@@ -665,25 +861,26 @@ function DashboardDrawModal({ file, isVideo, onClose, onConfirm }: DashboardDraw
                   ref={el => { mediaRef.current = el; }}
                   src={fileURL}
                   onLoad={handleImgLoad}
-                  className="max-w-full max-h-[60vh] block rounded pointer-events-none object-contain select-none"
+                  className="max-w-full max-h-full sm:max-h-[55vh] lg:max-h-[60vh] block rounded pointer-events-none object-contain select-none"
                   alt="Preview"
                 />
               )}
               <canvas
                 ref={canvasRef}
-                className="absolute inset-0 z-10 cursor-crosshair touch-none"
-                onMouseDown={startDrawing}
-                onMouseMove={draw}
-                onMouseUp={stopDrawing}
-                onMouseLeave={stopDrawing}
+                style={{ cursor: currentTool === 'pan' ? (isPanning ? 'grabbing' : 'grab') : 'crosshair' }}
+                className="absolute inset-0 z-10 touch-none"
+                onMouseDown={startDrawingOrPanning}
+                onMouseMove={drawOrPan}
+                onMouseUp={stopDrawingOrPanning}
+                onMouseLeave={stopDrawingOrPanning}
               />
             </div>
           )}
         </div>
 
         {/* Footer controls */}
-        <div className="flex items-center justify-between pt-4 mt-4 border-t border-zinc-900 shrink-0">
-          <div className="text-[10px] text-zinc-500 font-mono flex items-center gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pt-4 mt-4 border-t border-zinc-900 shrink-0">
+          <div className="text-[10px] text-zinc-500 font-mono flex flex-wrap items-center gap-4">
             {naturalWidth && naturalHeight ? (
               <span>Media Resolution: {naturalWidth}×{naturalHeight} px</span>
             ) : (
@@ -698,17 +895,17 @@ function DashboardDrawModal({ file, isVideo, onClose, onConfirm }: DashboardDraw
               </button>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 w-full sm:w-auto justify-end">
             <button
               onClick={onClose}
-              className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-zinc-900 hover:bg-zinc-800 text-zinc-300 transition"
+              className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-zinc-900 hover:bg-zinc-800 text-zinc-300 transition cursor-pointer"
             >
               Cancel
             </button>
             <button
               onClick={handleConfirm}
               disabled={!hasDrawn}
-              className="px-4 py-1.5 rounded-lg text-xs font-bold bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-900 disabled:text-zinc-600 text-white transition disabled:cursor-not-allowed"
+              className="px-4 py-1.5 rounded-lg text-xs font-bold bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-900 disabled:text-zinc-600 text-white transition disabled:cursor-not-allowed cursor-pointer"
             >
               Confirm Region
             </button>
@@ -716,6 +913,7 @@ function DashboardDrawModal({ file, isVideo, onClose, onConfirm }: DashboardDraw
         </div>
 
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

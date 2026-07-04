@@ -157,7 +157,7 @@ export default function LipSyncTool() {
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-violet-400 animate-pulse" />
-            SadTalker 3D Talking Head
+            Jellycut 3D AI Avatar
           </h3>
           <span className="text-[10px] font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase">
             Local AI
