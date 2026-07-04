@@ -74,12 +74,16 @@ export default function LipSyncTool() {
       });
     }, 7500);
 
+    const startTime = Date.now();
     const percentInterval = setInterval(() => {
+      const elapsed = (Date.now() - startTime) / 1000;
       setProgressPercent((prev) => {
         if (prev >= 98) return 98;
-        return prev + 1;
+        // Asymptotic curve: reaches 85% at 90s, 95% at 3 mins
+        const target = Math.floor(98 * (1 - Math.exp(-elapsed / 50)));
+        return Math.max(prev, target);
       });
-    }, 550);
+    }, 1000);
 
     try {
       const formData = new FormData();
