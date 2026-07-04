@@ -1,0 +1,49 @@
+filesplit==3.0.2
+opencv-python==4.11.0.86
+scikit-image>=0.22.0
+tqdm==4.67.1
+pyside6-fluent-widgets==1.7.7
+numpy==1.23.4
+av>=10.0.0
+einops==0.8.1
+# paddleocr==3.4.0
+matplotlib
+Pillow
+scipy
+requests
+darkdetect
+je-showinfilemanager==1.1.6a4
+# torch and torchvision are installed separately (see Dockerfile for platform-specific versions)
+
+# Training only
+#matplotlib
+#lpips
+#tensorboardX
+
+# Hardware acceleration
+#onnxruntime-gpu==1.20.1; sys_platform == 'linux'
+
+# do not upgrade, windows 10/11 compatable issues, check hardware_acclerator.py:100
+#onnxruntime-directml==1.20.1; sys_platform == 'win32'
+#onnxruntime==1.22.0; sys_platform == 'darwin'
+fastapi
+uvicorn
+python-multipart
+onnxruntime>=1.16.0
+librosa>=0.10.1
+soundfile>=0.12.1
+torch
+torchvision
+yacs
+pypng
+face_alignment
+imageio-ffmpeg
+resampy
+pydub
+kornia
+pyyaml
+joblib
+basicsr
+facexlib
+gfpgan
+safetensors
