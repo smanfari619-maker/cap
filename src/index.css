@@ -520,8 +520,8 @@ input[type="range"]::-moz-range-thumb:hover {
 .dashboard-softer-dark .fixed.inset-0.bg-black\/80 {
   background-color: rgba(0, 0, 0, 0.8) !important;
 }
-.dashboard-softer-dark .fixed.inset-0 .bg-[#111113],
-.dashboard-softer-dark .fixed.inset-0 .bg-[#18181c] {
+.dashboard-softer-dark .fixed.inset-0 .bg-\[\#111113\],
+.dashboard-softer-dark .fixed.inset-0 .bg-\[\#18181c\] {
   background-color: #1e1e22 !important;
   border-color: #2d2d34 !important;
   color: #f4f4f5 !important;
