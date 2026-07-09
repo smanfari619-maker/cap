@@ -11,6 +11,7 @@ export interface Asset {
   height?: number;
   opfsPath: string;
   createdAt: Date;
+  waveformPeaks?: number[];
 }
 
 export interface TimelineClip {
@@ -23,6 +24,8 @@ export interface TimelineClip {
   trimEndMs: number;   // Trim end offset in source asset (ms)
   positionMs: number;  // Position on timeline (ms)
   trackId: string;
+  disabled?: boolean;  // Disable playback & rendering of this clip
+  
   
   // Speed & Audio
   speed?: number;
@@ -59,7 +62,6 @@ export interface TimelineClip {
     intensity: number;
   };
 
-  // Text Overlay properties
   textSettings?: {
     content: string;
     color: string;
@@ -68,6 +70,26 @@ export interface TimelineClip {
     x: number; // 0-1 normalized
     y: number; // 0-1 normalized
     scale: number;
+    
+    // Outlines & Borders
+    strokeColor?: string;
+    strokeWidth?: number;
+
+    // Drop Shadows
+    shadowColor?: string;
+    shadowBlur?: number;
+    shadowOffsetX?: number;
+    shadowOffsetY?: number;
+
+    // Background Fills
+    backgroundColor?: string;
+    backgroundAlpha?: number; // 0-100
+    backgroundPadding?: number;
+    backgroundBorderRadius?: number;
+
+    // Spacing
+    letterSpacing?: number;
+    lineHeight?: number;
   };
 
   // Visual transform settings (scale, translation, rotation, blend mode)
@@ -96,6 +118,20 @@ export interface TimelineClip {
     color: string;      // hex color to remove (e.g. #00ff00)
     tolerance: number;  // tolerance threshold (1-100, default 30)
     feather: number;    // feather edge softness (1-100, default 10)
+  };
+
+  // AI Background Removal
+  aiBackgroundRemoval?: {
+    enabled: boolean;
+    mode: 'remove' | 'blur';
+    blurRadius: number;
+  };
+
+  // Smart Reframe
+  smartReframe?: {
+    enabled: boolean;
+    targetAspect: '9:16' | '1:1';
+    smoothing: number;
   };
 
   // Pro HSL adjustments
@@ -162,11 +198,23 @@ export interface Project {
   markers?: TimelineMarker[];
   createdAt: Date;
   updatedAt: Date;
+  // Folder grouping — set by Story Cutter and other batch tools
+  folderId?: string;
+  folderName?: string;
+}
+
+export interface ProjectVersion {
+  id: string;
+  projectId: string;
+  label: string;
+  projectData: string; // JSON string of project structure
+  createdAt: Date;
 }
 
 class CapCutDatabase extends Dexie {
   projects!: Table<Project>;
   assets!: Table<Asset>;
+  projectVersions!: Table<ProjectVersion>;
 
   constructor() {
     super('CapCutDatabase');
@@ -183,6 +231,18 @@ class CapCutDatabase extends Dexie {
     this.version(3).stores({
       projects: 'id, title, createdAt, updatedAt',
       assets: 'id, projectId, type, createdAt'
+    });
+    // Version 4: adds projectVersions table for version rollback history
+    this.version(4).stores({
+      projects: 'id, title, createdAt, updatedAt',
+      assets: 'id, projectId, type, createdAt',
+      projectVersions: 'id, projectId, createdAt'
+    });
+    // Version 5: adds folderId index to projects for folder grouping
+    this.version(5).stores({
+      projects: 'id, title, createdAt, updatedAt, folderId',
+      assets: 'id, projectId, type, createdAt',
+      projectVersions: 'id, projectId, createdAt'
     });
   }
 }

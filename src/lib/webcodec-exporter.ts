@@ -7,6 +7,7 @@ import { parseCubeLUT, applyLut3D, type Lut3D } from './lut-solver';
 import { initUpscaler, upscaleFrame, isUpscalerReady } from './upscaler';
 import { applyTransitionTransform, drawTransitionOverlay, applyWipeClip } from './transitions-registry';
 import { buildEffectFilterString, applyCanvasEffect } from './effects-registry';
+import { getSubjectFaceCenter } from './face-tracker';
 import { createFile, DataStream, Endianness } from 'mp4box';
 
 export interface ExportSettings {
@@ -263,6 +264,7 @@ export async function exportProjectWebCodecs(
   if (durationMs === 0) durationMs = 5000;
 
   const totalFrames = Math.ceil((durationMs / 1000) * fps);
+  const smoothedRefX: Record<string, number> = {};
 
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
@@ -651,18 +653,41 @@ export async function exportProjectWebCodecs(
           let dx = 0;
           let dy = 0;
 
-          if (srcRatio > destRatio) {
-            dHeight = renderWidth / srcRatio;
-            dy = (renderHeight - dHeight) / 2;
-          } else {
-            dWidth = renderHeight * srcRatio;
-            dx = (renderWidth - dWidth) / 2;
-          }
-
           const drawSource = frameToDraw || fallbackVideo!;
 
           if (offCtx) {
             offCtx.filter = filterString.trim() || 'none';
+
+            if (clip.smartReframe && clip.smartReframe.enabled) {
+              const scale = Math.max(renderWidth / srcWidth, renderHeight / srcHeight);
+              dWidth = srcWidth * scale;
+              dHeight = srcHeight * scale;
+
+              const frameNum = Math.floor((timeMs / 1000) * fps);
+              if (frameNum % 10 === 0 || smoothedRefX[clip.id] === undefined) {
+                offCtx.drawImage(drawSource, 0, 0, renderWidth, renderHeight);
+                const rawX = getSubjectFaceCenter(offCtx, renderWidth, renderHeight);
+                const smoothing = (clip.smartReframe.smoothing ?? 20) / 100;
+                const prevX = smoothedRefX[clip.id] !== undefined ? smoothedRefX[clip.id] : 0.5;
+                smoothedRefX[clip.id] = prevX * (1 - smoothing) + rawX * smoothing;
+              }
+
+              const faceX = smoothedRefX[clip.id] !== undefined ? smoothedRefX[clip.id] : 0.5;
+              dx = (renderWidth / 2) - (faceX * dWidth);
+              dx = Math.max(renderWidth - dWidth, Math.min(0, dx));
+              dy = (renderHeight - dHeight) / 2;
+
+              offCtx.clearRect(0, 0, renderWidth, renderHeight);
+            } else {
+              if (srcRatio > destRatio) {
+                dHeight = renderWidth / srcRatio;
+                dy = (renderHeight - dHeight) / 2;
+              } else {
+                dWidth = renderHeight * srcRatio;
+                dx = (renderWidth - dWidth) / 2;
+              }
+            }
+
             offCtx.drawImage(drawSource, dx, dy, dWidth, dHeight);
             offCtx.filter = 'none';
 
@@ -702,6 +727,44 @@ export async function exportProjectWebCodecs(
                 }
               }
               offCtx.putImageData(imgData, 0, 0);
+            }
+
+            if (clip.aiBackgroundRemoval && clip.aiBackgroundRemoval.enabled) {
+              const faceX = smoothedRefX[clip.id] !== undefined ? smoothedRefX[clip.id] : 0.5;
+              const mode = clip.aiBackgroundRemoval.mode || 'remove';
+
+              const tempCanvas = document.createElement('canvas');
+              tempCanvas.width = renderWidth;
+              tempCanvas.height = renderHeight;
+              const tempCtx = tempCanvas.getContext('2d')!;
+              tempCtx.drawImage(offscreen, 0, 0);
+
+              if (mode === 'blur') {
+                offCtx.save();
+                const radius = clip.aiBackgroundRemoval.blurRadius || 10;
+                offCtx.filter = `blur(${radius}px)`;
+                offCtx.drawImage(tempCanvas, 0, 0);
+                offCtx.restore();
+              } else {
+                offCtx.clearRect(0, 0, renderWidth, renderHeight);
+              }
+
+              tempCtx.save();
+              tempCtx.globalCompositeOperation = 'destination-in';
+
+              const grad = tempCtx.createRadialGradient(
+                faceX * renderWidth, renderHeight * 0.45, renderHeight * 0.15,
+                faceX * renderWidth, renderHeight * 0.5, renderHeight * 0.5
+              );
+              grad.addColorStop(0, 'rgba(0,0,0,1)');
+              grad.addColorStop(0.65, 'rgba(0,0,0,0.85)');
+              grad.addColorStop(1, 'rgba(0,0,0,0)');
+
+              tempCtx.fillStyle = grad;
+              tempCtx.fillRect(0, 0, renderWidth, renderHeight);
+              tempCtx.restore();
+
+              offCtx.drawImage(tempCanvas, 0, 0);
             }
 
             if (clip.hslAdjustments) {
@@ -898,13 +961,91 @@ export async function exportProjectWebCodecs(
 
     for (const { clip, trackHidden } of activeTextClips) {
       if (trackHidden || !clip.textSettings) continue;
-      const textSettings = clip.textSettings;
+      const settings = clip.textSettings;
       ctx.save();
-      ctx.fillStyle = textSettings.color;
-      ctx.font = `bold ${textSettings.fontSize}px ${textSettings.fontFamily}`;
+      
+      const scaleRatio = renderHeight / 360;
+      const fontSize = settings.fontSize * scaleRatio;
+      ctx.font = `${fontSize}px ${settings.fontFamily || 'Inter'}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(textSettings.content, textSettings.x * renderWidth, textSettings.y * renderHeight);
+
+      // Apply letter-spacing if supported
+      if (settings.letterSpacing !== undefined && settings.letterSpacing !== 0) {
+        try {
+          (ctx as any).letterSpacing = `${settings.letterSpacing * scaleRatio}px`;
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      const lines = settings.content.split('\n');
+      const lineHeightMultiplier = settings.lineHeight ?? 1.2;
+      const lineHeight = fontSize * lineHeightMultiplier;
+      
+      const xPos = settings.x * renderWidth;
+      const yPos = settings.y * renderHeight;
+
+      // Measure layout size
+      let maxLineWidth = 0;
+      lines.forEach(line => {
+        const metrics = ctx.measureText(line);
+        if (metrics.width > maxLineWidth) {
+          maxLineWidth = metrics.width;
+        }
+      });
+
+      const totalHeight = lines.length * lineHeight;
+      const startY = yPos - (totalHeight / 2) + (lineHeight / 2);
+
+      // 1. Draw Background Box
+      if (settings.backgroundColor) {
+        ctx.save();
+        const padding = (settings.backgroundPadding ?? 8) * scaleRatio;
+        const radius = (settings.backgroundBorderRadius ?? 4) * scaleRatio;
+        const bgW = maxLineWidth + padding * 2;
+        const bgH = totalHeight + padding * 1.5;
+        const bgX = xPos - bgW / 2;
+        const bgY = yPos - bgH / 2;
+
+        ctx.fillStyle = settings.backgroundColor;
+        const alpha = settings.backgroundAlpha !== undefined ? settings.backgroundAlpha / 100 : 0.8;
+        ctx.globalAlpha = alpha;
+
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(bgX, bgY, bgW, bgH, radius);
+        } else {
+          ctx.rect(bgX, bgY, bgW, bgH);
+        }
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // 2. Configure Drop Shadow
+      if (settings.shadowColor) {
+        ctx.shadowColor = settings.shadowColor;
+        ctx.shadowBlur = (settings.shadowBlur ?? 5) * scaleRatio;
+        ctx.shadowOffsetX = (settings.shadowOffsetX ?? 2) * scaleRatio;
+        ctx.shadowOffsetY = (settings.shadowOffsetY ?? 2) * scaleRatio;
+      }
+
+      // 3. Draw stroke + fill for all lines
+      lines.forEach((line, index) => {
+        const lineY = startY + index * lineHeight;
+
+        const sWidth = settings.strokeWidth !== undefined ? settings.strokeWidth * scaleRatio : Math.max(2, fontSize * 0.08);
+        if (sWidth > 0) {
+          ctx.strokeStyle = settings.strokeColor || '#000000';
+          ctx.lineWidth = sWidth;
+          ctx.lineJoin = 'round';
+          ctx.strokeText(line, xPos, lineY);
+        }
+
+        ctx.fillStyle = settings.color || '#ffffff';
+        ctx.fillText(line, xPos, lineY);
+      });
+
       ctx.restore();
     }
 

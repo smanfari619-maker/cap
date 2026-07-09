@@ -52,7 +52,7 @@ export default function UploadZone() {
           createdAt: new Date()
         };
 
-        await db.assets.add(newAsset);
+        await db.assets.put(newAsset);
       } catch (error) {
         console.error('Failed to import file:', error);
         alert(`Error importing ${file.name}`);

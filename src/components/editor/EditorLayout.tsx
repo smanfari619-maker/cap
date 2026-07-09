@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Edit2, Sparkles, Download, Loader2, CheckCircle2, Film, Music, Type, Smile, Scissors, Languages, Palette, Sliders, Users, Keyboard, Volume2, Timer, X, Trash2, ChevronDown, Zap } from 'lucide-react';
 import { useEditorStore } from '../../store/editorStore';
 import { db } from '../../lib/db';
+import { useHotkeys } from '../../hooks/useHotkeys';
 import LeftSidebar from './LeftSidebar';
 import VideoPreview from './VideoPreview';
 import ClipInspector from './ClipInspector';
@@ -9,6 +10,7 @@ import Timeline from './Timeline';
 import { exportProjectWebCodecs } from '../../lib/webcodec-exporter';
 import jellycutLogo from '../../assets/jellycut_logo.svg';
 import MobileMediaPicker from '../mobile/MobileMediaPicker';
+import LipSyncTool from '../dashboard/LipSyncTool';
 
 const tabs = [
   { id: 'media', label: 'Media', icon: Film },
@@ -21,6 +23,7 @@ const tabs = [
   { id: 'filters', label: 'Filters', icon: Palette },
   { id: 'adjustment', label: 'Adjustment', icon: Sliders },
   { id: 'ai-avatars', label: 'AI Avatars', icon: Users },
+  { id: 'history', label: 'History', icon: Timer },
 ];
 
 export default function EditorLayout() {
@@ -28,9 +31,6 @@ export default function EditorLayout() {
   const closeProject = useEditorStore(state => state.closeProject);
   const setCurrentTime = useEditorStore(state => state.setCurrentTime);
   const setIsPlaying = useEditorStore(state => state.setIsPlaying);
-  const isPlaying = useEditorStore(state => state.isPlaying);
-  const zoom = useEditorStore(state => state.zoom);
-  const setZoom = useEditorStore(state => state.setZoom);
   const selectedClipId = useEditorStore(state => state.selectedClipId);
   const selectedClipIds = useEditorStore(state => state.selectedClipIds);
   const setSelectedClipId = useEditorStore(state => state.setSelectedClipId);
@@ -41,8 +41,6 @@ export default function EditorLayout() {
   const splitClipAtPlayhead = useEditorStore(state => state.splitClipAtPlayhead);
   const updateClip = useEditorStore(state => state.updateClip);
   const upscaleEnabled = useEditorStore(state => state.upscaleEnabled);
-  const undo = useEditorStore(state => state.undo);
-  const redo = useEditorStore(state => state.redo);
 
   const clipboardClipRef = useRef<any>(null);
 
@@ -166,95 +164,20 @@ export default function EditorLayout() {
     }
   };
 
-  // Full keyboard shortcut listener
+  // Invoke global editor shortcuts hook
+  useHotkeys();
+
+  // Local copy-paste keyboard listener
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleCopyPaste = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) {
         return;
       }
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const isCmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
 
-      // Undo / Redo
-      if (isCmdOrCtrl && e.key === 'z') {
-        e.preventDefault();
-        if (e.shiftKey) { redo(); } else { undo(); }
-      } else if (isCmdOrCtrl && e.key === 'y') {
-        e.preventDefault();
-        redo();
-      }
-      // Play/Pause
-      else if (e.key === ' ') {
-        e.preventDefault();
-        setIsPlaying(!isPlaying);
-      }
-      // Delete selected clips
-      else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedClipIds.length > 0) {
-        e.preventDefault();
-        selectedClipIds.forEach(id => removeClip(id));
-      }
-      // Select All (Ctrl/Cmd + A)
-      else if (isCmdOrCtrl && (e.key === 'a' || e.key === 'A')) {
-        e.preventDefault();
-        if (!project) return;
-        const allClipIds = project.tracks.flatMap(t => t.clips.map(c => c.id));
-        setSelectedClipIds(allClipIds);
-      }
-      // Split at playhead
-      else if (e.key === 's' || e.key === 'S') {
-        if (!isCmdOrCtrl) { e.preventDefault(); splitClipAtPlayhead(); }
-      }
-      // Arrow scrub: frame-step 33ms, shift = 1s
-      else if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        setCurrentTime(Math.max(0, useEditorStore.getState().currentTime - (e.shiftKey ? 1000 : 33)));
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        setCurrentTime(useEditorStore.getState().currentTime + (e.shiftKey ? 1000 : 33));
-      }
-      // Bracket zoom [ and ]
-      else if (e.key === '[') {
-        e.preventDefault();
-        setZoom(Math.max(10, zoom - 10));
-      } else if (e.key === ']') {
-        e.preventDefault();
-        setZoom(Math.min(500, zoom + 10));
-      }
-      // Shift+Z: Zoom to fit timeline window
-      else if (e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
-        if (!isCmdOrCtrl) {
-          e.preventDefault();
-          if (!project) return;
-          let maxTime = 10000; // minimum 10s
-          project.tracks.forEach(t => {
-            t.clips.forEach(c => {
-              maxTime = Math.max(maxTime, c.positionMs + c.durationMs);
-            });
-          });
-          const scrollEl = document.querySelector('.timeline-scroll');
-          if (scrollEl) {
-            const fitZoom = (scrollEl.clientWidth - 40) / (maxTime / 1000);
-            setZoom(Math.max(10, Math.min(500, fitZoom)));
-          }
-        }
-      }
-      // Home / End playhead navigation
-      else if (e.key === 'Home') {
-        e.preventDefault();
-        setCurrentTime(0);
-      } else if (e.key === 'End') {
-        e.preventDefault();
-        if (!project) return;
-        let maxTime = 0;
-        project.tracks.forEach(t => {
-          t.clips.forEach(c => {
-            maxTime = Math.max(maxTime, c.positionMs + c.durationMs);
-          });
-        });
-        setCurrentTime(maxTime);
-      }
       // Clipboard Copy (Ctrl/Cmd + C)
-      else if (isCmdOrCtrl && (e.key === 'c' || e.key === 'C')) {
+      if (isCmdOrCtrl && (e.key === 'c' || e.key === 'C')) {
         if (selectedClipIds.length > 0) {
           e.preventDefault();
           const target = project?.tracks.flatMap(t => t.clips).find(c => selectedClipIds.includes(c.id));
@@ -282,34 +205,10 @@ export default function EditorLayout() {
           }
         }
       }
-      // J/K/L Shuttle speed play/reverse control
-      else if (!isCmdOrCtrl && !e.altKey && e.key.toLowerCase() === 'l') {
-        e.preventDefault();
-        const liveSpeed = useEditorStore.getState().playbackSpeed;
-        const nextSpeed = liveSpeed >= 1 ? Math.min(8, liveSpeed * 2) : 1;
-        useEditorStore.setState({ playbackSpeed: nextSpeed });
-        setIsPlaying(true);
-      }
-      else if (!isCmdOrCtrl && !e.altKey && e.key.toLowerCase() === 'j') {
-        e.preventDefault();
-        const liveSpeed = useEditorStore.getState().playbackSpeed;
-        const nextSpeed = liveSpeed <= -1 ? Math.max(-8, liveSpeed * 2) : -1;
-        useEditorStore.setState({ playbackSpeed: nextSpeed });
-        setIsPlaying(true);
-      }
-      else if (!isCmdOrCtrl && !e.altKey && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        useEditorStore.setState({ playbackSpeed: 1 });
-        setIsPlaying(false);
-      }
-      // Escape deselect
-      else if (e.key === 'Escape') {
-        setSelectedClipIds([]);
-      }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, isPlaying, setIsPlaying, setCurrentTime, zoom, setZoom, selectedClipId, selectedClipIds, setSelectedClipId, setSelectedClipIds, removeClip, addClip, splitClipAtPlayhead, project]);
+    window.addEventListener('keydown', handleCopyPaste);
+    return () => window.removeEventListener('keydown', handleCopyPaste);
+  }, [project, selectedClipIds, setSelectedClipIds, addClip]);
 
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [projectTitle, setProjectTitle] = useState('');
@@ -539,6 +438,24 @@ export default function EditorLayout() {
               {tabs.map(tab => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
+                if (tab.id === 'ai-avatars') {
+                  return (
+                    <LipSyncTool
+                      key={tab.id}
+                      renderTrigger={(open) => (
+                        <button
+                          onClick={open}
+                          className="flex flex-col items-center justify-center px-2.5 h-full transition-all relative text-gray-400 hover:bg-[#2a2a30] hover:text-gray-200 cursor-pointer"
+                          title="Generate a 3D AI Talking Avatar locally"
+                        >
+                          <Icon className="w-3.5 h-3.5 mb-0.5" />
+                          <span className="text-[8px] uppercase tracking-wider font-medium">{tab.label}</span>
+                        </button>
+                      )}
+                    />
+                  );
+                }
+
                 return (
                   <button
                     key={tab.id}
@@ -546,7 +463,7 @@ export default function EditorLayout() {
                     className={`flex flex-col items-center justify-center px-2.5 h-full transition-all relative ${
                       isActive 
                         ? 'text-sky-400 font-bold' 
-                        : 'text-gray-400 hover:bg-[#2a2a30] hover:text-gray-200'
+                        : 'text-gray-400 hover:bg-[#2a2a30] hover:text-gray-200 cursor-pointer'
                     }`}
                   >
                     <Icon className="w-3.5 h-3.5 mb-0.5" />
@@ -879,13 +796,18 @@ export default function EditorLayout() {
                 <Sliders className="w-4 h-4" />
                 <span className="text-[8px] font-bold">Adjust</span>
               </button>
-              <button 
-                onClick={() => { setActiveTab('ai-avatars'); setShowMobileSheet(true); }}
-                className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
-              >
-                <Users className="w-4 h-4" />
-                <span className="text-[8px] font-bold">AI Avatars</span>
-              </button>
+              <LipSyncTool
+                renderTrigger={(open) => (
+                  <button 
+                    onClick={open}
+                    className="flex flex-col items-center gap-1 text-zinc-400 hover:text-zinc-200 transition cursor-pointer"
+                    title="Generate a 3D AI Talking Avatar locally"
+                  >
+                    <Users className="w-4 h-4" />
+                    <span className="text-[8px] font-bold">AI Avatars</span>
+                  </button>
+                )}
+              />
             </div>
           )}
         </div>

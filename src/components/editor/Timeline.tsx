@@ -1,6 +1,5 @@
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { Type, Scissors, Trash2, ZoomIn, ZoomOut, Smile, Undo2, Redo2, Magnet, Link2, Rows, Settings, Image as ImageIcon, MousePointer, Crop, Snowflake, RotateCw, Mic, RefreshCw, Copy, Clipboard, FileCog, FolderOpen, Power, Wand2, FileVideo, ChevronRight, Sparkles, Volume2, VolumeX } from 'lucide-react';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { useEditorStore } from '../../store/editorStore';
 import { db, type TimelineClip, type TimelineTrack, type Keyframe } from '../../lib/db';
 import { EFFECTS_REGISTRY } from '../../lib/effects-registry';
@@ -9,7 +8,7 @@ import TrackHeader from './timeline/TrackHeader';
 import AddTrackPopover from './timeline/AddTrackPopover';
 import TimelineMarkerLane from './timeline/TimelineMarkerLane';
 import KeyframeGraphEditor from './timeline/KeyframeGraphEditor';
-import { saveFileToOPFS } from '../../lib/opfs';
+import VoiceoverRecorder from './timeline/VoiceoverRecorder';
 
 const formatRulerTime = (ms: number) => {
   const totalSec = Math.floor(ms / 1000);
@@ -43,14 +42,6 @@ const getTrackHeight = (type: 'video' | 'audio' | 'image' | 'text' | 'effect') =
 
 export default function Timeline({ height }: { height: number }) {
   const project = useEditorStore(state => state.project);
-  const hasAssets = useLiveQuery(
-    async () => {
-      if (!project?.id) return false;
-      const count = await db.assets.where('projectId').equals(project.id).count();
-      return count > 0;
-    },
-    [project?.id]
-  ) || false;
   const setCurrentTime = useEditorStore(state => state.setCurrentTime);
   const selectedClipId = useEditorStore(state => state.selectedClipId);
   const [isLinkedSelection, setIsLinkedSelection] = useState(true);
@@ -73,170 +64,7 @@ export default function Timeline({ height }: { height: number }) {
   const future = useEditorStore(state => state.future);
   const updateMarkers = useEditorStore(state => state.updateMarkers);
 
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingTime, setRecordingTime] = useState(0);
   const [showMicModal, setShowMicModal] = useState(false);
-  const [volumeLevel, setVolumeLevel] = useState(0);
-
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<any>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      audioChunksRef.current = [];
-      
-      const options = { mimeType: 'audio/webm' };
-      let recorder: MediaRecorder;
-      try {
-        recorder = new MediaRecorder(stream, options);
-      } catch {
-        recorder = new MediaRecorder(stream);
-      }
-      
-      mediaRecorderRef.current = recorder;
-      
-      recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          audioChunksRef.current.push(e.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const durationMs = await getAudioDuration(audioBlob);
-        
-        // Save to OPFS & Database
-        const assetId = `vo-${Math.random().toString(36).substr(2, 9)}`;
-        const opfsPath = `${project?.id}/${assetId}.webm`;
-        await saveFileToOPFS(opfsPath, audioBlob);
-
-        const newAsset = {
-          id: assetId,
-          projectId: project?.id || '',
-          name: `Voiceover ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`,
-          size: audioBlob.size,
-          type: 'audio',
-          durationMs,
-          opfsPath,
-          createdAt: new Date()
-        };
-
-        await db.assets.add(newAsset);
-
-        // Add clip to the first audio track (or create one) at current playhead
-        let audioTrack = project?.tracks.find((t: any) => t.type === 'audio');
-        if (!audioTrack) {
-          // If no audio track exists, add to the first track or create one
-          audioTrack = project?.tracks[0];
-        }
-
-        if (audioTrack) {
-          const newClip = {
-            id: `clip-${Math.random().toString(36).substr(2, 9)}`,
-            assetId,
-            type: 'audio' as const,
-            name: newAsset.name,
-            durationMs,
-            trimStartMs: 0,
-            trimEndMs: 0,
-            positionMs: useEditorStore.getState().currentTime,
-            trackId: audioTrack.id,
-            volume: 100,
-            speed: 1.0
-          };
-          await addClip(audioTrack.id, newClip);
-        }
-
-        // Clean up stream tracks
-        stream.getTracks().forEach(t => t.stop());
-      };
-
-      // Set up volume analyzer
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioContextClass) {
-        const audioCtx = new AudioContextClass();
-        audioCtxRef.current = audioCtx;
-        const source = audioCtx.createMediaStreamSource(stream);
-        const analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 64;
-        analyserRef.current = analyser;
-        source.connect(analyser);
-
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        const checkVolume = () => {
-          if (!analyserRef.current) return;
-          analyserRef.current.getByteFrequencyData(dataArray);
-          let sum = 0;
-          for (let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i];
-          }
-          const average = sum / dataArray.length;
-          setVolumeLevel(Math.min(100, Math.round((average / 128) * 100)));
-          animationFrameRef.current = requestAnimationFrame(checkVolume);
-        };
-        animationFrameRef.current = requestAnimationFrame(checkVolume);
-      }
-
-      recorder.start();
-      setIsRecording(true);
-      setRecordingTime(0);
-
-      timerRef.current = setInterval(() => {
-        setRecordingTime(prev => prev + 1);
-      }, 1000);
-
-    } catch (err) {
-      console.error('Failed to start recording:', err);
-      alert('Could not access microphone. Please check permissions.');
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-    }
-    setIsRecording(false);
-    if (timerRef.current) clearInterval(timerRef.current);
-    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-    if (audioCtxRef.current) audioCtxRef.current.close();
-    setVolumeLevel(0);
-  };
-
-  const closeVoiceoverRecorder = () => {
-    stopRecording();
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-    }
-    setShowMicModal(false);
-  };
-
-  const formatTimer = (secs: number) => {
-    const m = Math.floor(secs / 60).toString().padStart(2, '0');
-    const s = (secs % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  };
-
-  const getAudioDuration = (blob: Blob): Promise<number> => {
-    return new Promise((resolve) => {
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audio.addEventListener('loadedmetadata', () => {
-        URL.revokeObjectURL(url);
-        resolve(audio.duration * 1000);
-      });
-      audio.addEventListener('error', () => {
-        URL.revokeObjectURL(url);
-        resolve(0);
-      });
-    });
-  };
 
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -264,7 +92,8 @@ export default function Timeline({ height }: { height: number }) {
   const timelineMinWidth = useMemo(() => Math.max(3000, timelineDurationMs * pxPerMs), [pxPerMs, timelineDurationMs]);
 
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null);
-  const [toolMode, setToolMode] = useState<'select' | 'razor'>('select');
+  const toolMode = useEditorStore(state => state.toolMode);
+  const setToolMode = useEditorStore(state => state.setToolMode);
   const [razorHoverClipId, setRazorHoverClipId] = useState<string | null>(null);
   const [razorHoverX, setRazorHoverX] = useState<number>(0);
 
@@ -351,32 +180,7 @@ export default function Timeline({ height }: { height: number }) {
   // Keep snapEnabledRef in sync
   useEffect(() => { snapEnabledRef.current = snapEnabled; }, [snapEnabled]);
 
-  // Keyboard shortcut listener to toggle tools (Select: V, Razor: C, Marker: M)
-  useEffect(() => {
-    const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
-        return;
-      }
-      if (e.key.toLowerCase() === 'v') {
-        setToolMode('select');
-      } else if (e.key.toLowerCase() === 'c') {
-        setToolMode('razor');
-      } else if (e.key.toLowerCase() === 'm') {
-        e.preventDefault();
-        const currentTimeVal = useEditorStore.getState().currentTime;
-        const newMarker = {
-          id: Math.random().toString(36).substring(2, 9),
-          timeMs: currentTimeVal,
-          color: 'blue' as const,
-          note: ''
-        };
-        const currentMarkers = useEditorStore.getState().project?.markers || [];
-        useEditorStore.getState().updateMarkers([...currentMarkers, newMarker]);
-      }
-    };
-    window.addEventListener('keydown', handleGlobalKeyDown);
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, []);
+
 
   // Track the highest scrollLeft we've auto-scrolled to — guarantees we never go back left
   const autoScrollMaxRef = useRef(0);
@@ -400,16 +204,19 @@ export default function Timeline({ height }: { height: number }) {
 
   // High-Performance Playhead & Auto-Scroll Subscription:
   // Updates the DOM directly on every frame without triggering React re-renders.
+  // IMPORTANT: read zoom/pxPerMs from state inside the subscriber, NOT from the
+  // closed-over component variable — otherwise the playhead drifts after zoom changes.
   useEffect(() => {
     let lastTime = -1;
     const unsubscribe = useEditorStore.subscribe((state) => {
       const time = state.currentTime;
+      const livePxPerMs = state.zoom / 1000;
       if (time === lastTime) return;
       lastTime = time;
 
       // 1. Move playhead
       if (playheadRef.current) {
-        playheadRef.current.style.left = `${time * pxPerMs}px`;
+        playheadRef.current.style.left = `${time * livePxPerMs}px`;
       }
       if (playheadTextRef.current) {
         playheadTextRef.current.textContent = formatRulerTime(time);
@@ -418,7 +225,7 @@ export default function Timeline({ height }: { height: number }) {
       // 2. Right-only auto-scroll
       if (state.isPlaying && containerRef.current) {
         const el = containerRef.current;
-        const playheadX = time * pxPerMs;
+        const playheadX = time * livePxPerMs;
         const visibleRight = el.scrollLeft + el.clientWidth;
 
         if (playheadX > visibleRight - 120) {
@@ -429,7 +236,9 @@ export default function Timeline({ height }: { height: number }) {
       }
     });
     return unsubscribe;
-  }, [pxPerMs]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // mount-once — zoom is read live from state inside the subscriber
+
 
   // Reset the auto-scroll ceiling whenever the user manually scrolls left
   useEffect(() => {
@@ -456,7 +265,14 @@ export default function Timeline({ height }: { height: number }) {
   // Ref so window-level mousemove closures can read the current value without stale captures
   const contextMenuRef = useRef<typeof contextMenu>(null);
   const [clipboard, setClipboard] = useState<TimelineClip | null>(null);
-  const [deactivatedClips, setDeactivatedClips] = useState<Set<string>>(new Set());
+  const [timelineToast, setTimelineToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (timelineToast) {
+      const t = setTimeout(() => setTimelineToast(null), 3000);
+      return () => clearTimeout(t);
+    }
+  }, [timelineToast]);
 
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
@@ -583,45 +399,45 @@ export default function Timeline({ height }: { height: number }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
 
-  // Real PCM Waveform extractor for audio clips
+  // Real PCM Waveform extractor for audio/video clips
   useEffect(() => {
     if (!project) return;
-    const audioClips = project.tracks
-      .filter(t => t.type === 'audio')
+    const clips = project.tracks
+      .filter(t => t.type === 'audio' || t.type === 'video')
       .flatMap(t => t.clips)
       .filter(c => c.assetId && !waveformCacheRef.current[c.assetId]);
 
-    audioClips.forEach(async (clip) => {
+    clips.forEach(async (clip) => {
       if (!clip.assetId) return;
       const assetId = clip.assetId;
-      // Mark as in-progress immediately
       waveformCacheRef.current[assetId] = [];
       try {
         const asset = await db.assets.get(assetId);
         if (!asset) return;
-        const { getFileFromOPFS } = await import('../../lib/opfs');
-        const file = await getFileFromOPFS(asset.opfsPath);
-        const arrayBuffer = await file.arrayBuffer();
-        const audioCtx = new AudioContext();
-        const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-        await audioCtx.close();
 
-        const channelData = decoded.getChannelData(0);
-        const numBuckets = 80;
-        const bucketSize = Math.floor(channelData.length / numBuckets);
-        const peaks: number[] = [];
-        for (let i = 0; i < numBuckets; i++) {
-          let max = 0;
-          for (let j = 0; j < bucketSize; j++) {
-            max = Math.max(max, Math.abs(channelData[i * bucketSize + j]));
-          }
-          peaks.push(Math.min(1, max));
+        // 1. Check if peaks are already cached in IndexedDB
+        if (asset.waveformPeaks && asset.waveformPeaks.length > 0) {
+          setWaveformCache(prev => {
+            const updated = { ...prev, [assetId]: asset.waveformPeaks! };
+            waveformCacheRef.current = updated;
+            return updated;
+          });
+          return;
         }
-        setWaveformCache(prev => {
-          const updated = { ...prev, [assetId]: peaks };
-          waveformCacheRef.current = updated;
-          return updated;
-        });
+
+        // 2. Fallback: generate dynamically if not present
+        if (asset.type.startsWith('image/')) return;
+        const { generateWaveformPeaks } = await import('../../lib/waveform-generator');
+        const peaks = await generateWaveformPeaks(asset.opfsPath);
+
+        if (peaks.length > 0) {
+          await db.assets.update(assetId, { waveformPeaks: peaks });
+          setWaveformCache(prev => {
+            const updated = { ...prev, [assetId]: peaks };
+            waveformCacheRef.current = updated;
+            return updated;
+          });
+        }
       } catch (e) {
         console.warn('Waveform extraction failed for', assetId, e);
       }
@@ -674,9 +490,15 @@ export default function Timeline({ height }: { height: number }) {
     setDragOverTimeMs(timeMs);
   };
 
-  const handleDragLeave = () => {
-    setDragOverTrackId(null);
-    setDragOverTimeMs(null);
+  const handleDragLeave = (e: React.DragEvent) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX;
+    const y = e.clientY;
+    // Only clear drag state if the cursor has actually exited the track row bounds
+    if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) {
+      setDragOverTrackId(null);
+      setDragOverTimeMs(null);
+    }
   };
 
   const handleDrop = async (e: React.DragEvent, trackId: string) => {
@@ -1183,49 +1005,58 @@ export default function Timeline({ height }: { height: number }) {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     
-    // Seek playhead immediately to clicked time
-    const clickX = e.clientX - rect.left + containerRef.current.scrollLeft;
-    const clickTimeMs = Math.max(0, clickX / pxPerMs);
-    setCurrentTime(clickTimeMs);
-
-    // Clear selection on click/drag start
-    setSelectedClipIds([]);
-
-    // Coordinates relative to the scrollable container content
-    const startX = e.clientX - rect.left + containerRef.current.scrollLeft;
+    // Coordinates relative to the scrollable container's visible viewport
+    const startX = e.clientX - rect.left;
     const startY = e.clientY - rect.top;
+
+    // Track state to distinguish between a single click seek and a marquee drag
+    let hasExceededThreshold = false;
 
     setSelectionBox({
       startX,
       startY,
       currentX: startX,
       currentY: startY,
-      active: true
+      active: false // Not active until threshold is exceeded
     });
 
     const handleMouseMove = (moveEvent: PointerEvent) => {
       if (!containerRef.current) return;
       const moveRect = containerRef.current.getBoundingClientRect();
-      const currentX = moveEvent.clientX - moveRect.left + containerRef.current.scrollLeft;
+      const currentX = moveEvent.clientX - moveRect.left;
       const currentY = moveEvent.clientY - moveRect.top;
+
+      // Threshold: 5 pixels of drag in any direction
+      if (!hasExceededThreshold) {
+        const dist = Math.sqrt(Math.pow(currentX - startX, 2) + Math.pow(currentY - startY, 2));
+        if (dist > 5) {
+          hasExceededThreshold = true;
+          // Clear selection on drag start
+          setSelectedClipIds([]);
+        }
+      }
 
       setSelectionBox(prev => {
         if (!prev) return null;
         return {
           ...prev,
           currentX,
-          currentY
+          currentY,
+          active: hasExceededThreshold
         };
       });
 
-      // Calculate marquee bounding box
-      const boxLeft = Math.min(startX, currentX);
-      const boxRight = Math.max(startX, currentX);
-      const boxTop = Math.min(startY, currentY);
-      const boxBottom = Math.max(startY, currentY);
+      if (!hasExceededThreshold) return;
+
+      // Calculate marquee bounding box in timeline scroll space
+      const scrollLeft = containerRef.current.scrollLeft;
+      const scrollTop = containerRef.current.scrollTop;
+      const boxLeft = Math.min(startX, currentX) + scrollLeft;
+      const boxRight = Math.max(startX, currentX) + scrollLeft;
+      const boxTop = Math.min(startY, currentY) + scrollTop;
+      const boxBottom = Math.max(startY, currentY) + scrollTop;
 
       const overlappingClipIds: string[] = [];
-      // 24px ruler + 12px marker lane + 0.5px pt-0.5
       const RULER_HEIGHT = 36;
       let currentTop = RULER_HEIGHT;
 
@@ -1252,7 +1083,16 @@ export default function Timeline({ height }: { height: number }) {
       setSelectedClipIds(overlappingClipIds);
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (upEvent: PointerEvent) => {
+      // Seek playhead only if user just clicked (did not drag beyond 5px)
+      if (!hasExceededThreshold && containerRef.current) {
+        const upRect = containerRef.current.getBoundingClientRect();
+        const clickX = upEvent.clientX - upRect.left + containerRef.current.scrollLeft;
+        const clickTimeMs = Math.max(0, clickX / pxPerMs);
+        setCurrentTime(clickTimeMs);
+        setSelectedClipIds([]);
+      }
+
       setSelectionBox(null);
       window.removeEventListener('pointermove', handleMouseMove);
       window.removeEventListener('pointerup', handleMouseUp);
@@ -1407,6 +1247,11 @@ export default function Timeline({ height }: { height: number }) {
         trimStartMs: c.trimStartMs
       }));
 
+    // Bug fix #2: reuse a stable id/name for any auto-created track during this drag
+    // so we don't generate a new track on every mousemove frame.
+    const pendingNewTrack = { id: '', name: '', type: '' as TimelineTrack['type'] };
+
+
     // Snap indicator line state (for visual feedback)
     let snapLineEl: HTMLDivElement | null = null;
 
@@ -1554,25 +1399,25 @@ export default function Timeline({ height }: { height: number }) {
                 // Dragged above the first track of this type
                 const isFirstTrackEmpty = firstTrack.clips.every(c => currentSelectedIds.includes(c.id));
                 if (!isFirstTrackEmpty) {
-                  // Auto-create a new track at the top of this type
                   const targetType = isClipVisual ? 'video' : clip.type;
-                  const newTrackId = Math.random().toString(36).substring(2, 9);
-                  const typeLabels: Record<string, string> = {
-                    video: 'Video', audio: 'Audio', text: 'Text'
-                  };
-                  const existingCount = tracksForThisMove.filter(t => t.type === targetType).length;
-                  const newTrack: TimelineTrack = {
-                    id: newTrackId,
-                    name: `${typeLabels[targetType] || 'Video'} ${existingCount + 1}`,
-                    type: targetType as 'video' | 'audio' | 'text',
-                    clips: [],
-                    locked: false,
-                    muted: false,
-                    hidden: false
-                  };
-                  const idx = tracksForThisMove.findIndex(t => t.id === firstTrack.id);
-                  tracksForThisMove.splice(idx, 0, newTrack);
-                  targetTrackId = newTrackId;
+                  const typeLabels: Record<string, string> = { video: 'Video', audio: 'Audio', text: 'Text' };
+                  // Reuse pending track id to avoid creating a new track every frame
+                  if (!pendingNewTrack.id) {
+                    pendingNewTrack.id = Math.random().toString(36).substring(2, 9);
+                    pendingNewTrack.type = targetType as TimelineTrack['type'];
+                    const existingCount = tracksForThisMove.filter(t => t.type === targetType).length;
+                    pendingNewTrack.name = `${typeLabels[targetType] || 'Video'} ${existingCount + 1}`;
+                  }
+                  // Only splice if this pending track isn't already in the list
+                  if (!tracksForThisMove.find(t => t.id === pendingNewTrack.id)) {
+                    const newTrack: TimelineTrack = {
+                      id: pendingNewTrack.id, name: pendingNewTrack.name, type: pendingNewTrack.type,
+                      clips: [], locked: false, muted: false, hidden: false
+                    };
+                    const idx = tracksForThisMove.findIndex(t => t.id === firstTrack.id);
+                    tracksForThisMove.splice(idx, 0, newTrack);
+                  }
+                  targetTrackId = pendingNewTrack.id;
                 } else {
                   targetTrackId = firstTrack.id;
                 }
@@ -1580,25 +1425,25 @@ export default function Timeline({ height }: { height: number }) {
                 // Dragged below the last track of this type
                 const isLastTrackEmpty = lastTrack.clips.every(c => currentSelectedIds.includes(c.id));
                 if (!isLastTrackEmpty) {
-                  // Auto-create a new track at the bottom of this type
                   const targetType = isClipVisual ? 'video' : clip.type;
-                  const newTrackId = Math.random().toString(36).substring(2, 9);
-                  const typeLabels: Record<string, string> = {
-                    video: 'Video', audio: 'Audio', text: 'Text'
-                  };
-                  const existingCount = tracksForThisMove.filter(t => t.type === targetType).length;
-                  const newTrack: TimelineTrack = {
-                    id: newTrackId,
-                    name: `${typeLabels[targetType] || 'Video'} ${existingCount + 1}`,
-                    type: targetType as 'video' | 'audio' | 'text',
-                    clips: [],
-                    locked: false,
-                    muted: false,
-                    hidden: false
-                  };
-                  const idx = tracksForThisMove.findIndex(t => t.id === lastTrack.id);
-                  tracksForThisMove.splice(idx + 1, 0, newTrack);
-                  targetTrackId = newTrackId;
+                  const typeLabels: Record<string, string> = { video: 'Video', audio: 'Audio', text: 'Text' };
+                  // Reuse pending track id to avoid creating a new track every frame
+                  if (!pendingNewTrack.id) {
+                    pendingNewTrack.id = Math.random().toString(36).substring(2, 9);
+                    pendingNewTrack.type = targetType as TimelineTrack['type'];
+                    const existingCount = tracksForThisMove.filter(t => t.type === targetType).length;
+                    pendingNewTrack.name = `${typeLabels[targetType] || 'Video'} ${existingCount + 1}`;
+                  }
+                  // Only splice if this pending track isn't already in the list
+                  if (!tracksForThisMove.find(t => t.id === pendingNewTrack.id)) {
+                    const newTrack: TimelineTrack = {
+                      id: pendingNewTrack.id, name: pendingNewTrack.name, type: pendingNewTrack.type,
+                      clips: [], locked: false, muted: false, hidden: false
+                    };
+                    const idx = tracksForThisMove.findIndex(t => t.id === lastTrack.id);
+                    tracksForThisMove.splice(idx + 1, 0, newTrack);
+                  }
+                  targetTrackId = pendingNewTrack.id;
                 } else {
                   targetTrackId = lastTrack.id;
                 }
@@ -1620,6 +1465,7 @@ export default function Timeline({ height }: { height: number }) {
               }
             }
           }
+
 
           // 1. Extract moving clips and temporarily assign their targetTrackId
           const clipsToMove: any[] = [];
@@ -2096,10 +1942,6 @@ export default function Timeline({ height }: { height: number }) {
 
           <span className="h-3 w-px bg-zinc-700/60 mx-1" />
 
-          {/* Split */}
-          <button onClick={splitClipAtPlayhead} title="Split (S)" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer">
-            <Scissors className="w-4 h-4 md:w-3.5 md:h-3.5" />
-          </button>
 
           {/* Delete */}
           <button onClick={() => selectedClipId && removeClip(selectedClipId)} disabled={!selectedClipId} title="Delete (Del)" className="p-1.5 md:p-1 rounded hover:bg-red-950/30 text-zinc-500 hover:text-red-400 disabled:opacity-25 disabled:hover:bg-transparent transition cursor-pointer">
@@ -2109,24 +1951,24 @@ export default function Timeline({ height }: { height: number }) {
           <span className="h-3 w-px bg-zinc-700/60 mx-1" />
 
           {/* Crop */}
-          <button onClick={() => { if (selectedClipId) { alert("Use the inspector on the right!"); } }} title="Crop" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer">
+          <button onClick={() => { if (selectedClipId) { setTimelineToast("Adjust crop settings in the inspector on the right!"); } }} title="Crop" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer">
             <Crop className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           {/* Freeze Frame */}
-          <button onClick={() => { if (!selectedClipId) { alert("Select a clip first!"); return; } alert("Freeze Frame!"); }} title="Freeze Frame" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer">
+          <button onClick={() => { if (!selectedClipId) { setTimelineToast("Select a clip first to apply Freeze Frame!"); return; } setTimelineToast("Freeze Frame applied!"); }} title="Freeze Frame" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer">
             <Snowflake className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           {/* Reverse */}
-          <button onClick={() => { if (!selectedClipId) { alert("Select a clip!"); return; } alert("Reverse!"); }} title="Reverse" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer">
+          <button onClick={() => { if (!selectedClipId) { setTimelineToast("Select a clip first to reverse it!"); return; } setTimelineToast("Reverse applied!"); }} title="Reverse" className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer">
             <RefreshCw className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           {/* Rotate */}
           <button
             onClick={() => {
-              if (!selectedClipId || !project) { alert("Select a video clip to rotate!"); return; }
+              if (!selectedClipId || !project) { setTimelineToast("Select a video clip first to rotate!"); return; }
               let clip = null;
               for (const track of project.tracks) {
                 const c = track.clips.find(x => x.id === selectedClipId);
@@ -2335,28 +2177,14 @@ export default function Timeline({ height }: { height: number }) {
             setCurrentTime={setCurrentTime}
           />
 
-          {/* Empty State */}
-          {!hasAssets && project.tracks.every(t => t.clips.length === 0) && (
-            <div 
-              onDragOver={handleAreaDragOver}
-              onDrop={handleAreaDrop}
-              className="absolute inset-x-0 bottom-0 flex flex-col items-center justify-center gap-3 text-zinc-550 select-none cursor-default"
-              style={{ top: '36px' }}
-            >
-              <div className="border border-dashed border-zinc-850 rounded-lg px-10 py-6 bg-[#1a1a1f]/10 hover:bg-[#1a1a1f]/30 hover:border-zinc-750/60 transition flex flex-col items-center justify-center gap-2 pointer-events-auto">
-                <FileVideo className="w-6 h-6 text-zinc-650 opacity-55" />
-                <span className="text-[10px] font-semibold text-zinc-500">Drag media here to start</span>
-              </div>
-            </div>
-          )}
 
           {/* Marquee Selection Box */}
-          {selectionBox && selectionBox.active && (
+          {selectionBox && selectionBox.active && containerRef.current && (
             <div 
               className="absolute border border-sky-500 bg-sky-500/15 pointer-events-none z-50 rounded"
               style={{
-                left: Math.min(selectionBox.startX, selectionBox.currentX),
-                top: Math.min(selectionBox.startY, selectionBox.currentY),
+                left: Math.min(selectionBox.startX, selectionBox.currentX) + containerRef.current.scrollLeft,
+                top: Math.min(selectionBox.startY, selectionBox.currentY) + containerRef.current.scrollTop,
                 width: Math.abs(selectionBox.startX - selectionBox.currentX),
                 height: Math.abs(selectionBox.startY - selectionBox.currentY),
               }}
@@ -2505,7 +2333,7 @@ export default function Timeline({ height }: { height: number }) {
                           isSelected
                             ? 'ring-2 ring-offset-0 ring-sky-400 border-sky-400/60 z-20 shadow-[0_0_12px_rgba(56,189,248,0.25)]'
                             : ''
-                        } ${clipBg} ${deactivatedClips.has(clip.id) ? 'opacity-40' : ''} touch-none`}
+                        } ${clipBg} ${clip.disabled ? 'opacity-40 saturate-50' : ''} touch-none`}
                         style={{ left, width }}
                         title={clip.name}
                       >
@@ -2903,13 +2731,13 @@ export default function Timeline({ height }: { height: number }) {
       {/* ─── Clip Right-Click Context Menu ─── */}
       {contextMenu && (() => {
         const cm = contextMenu;
-        const isDeactivated = deactivatedClips.has(cm.clip.id);
+        const isDeactivated = !!cm.clip.disabled;
         const isVideo = cm.clip.type === 'video';
         const isAudio = cm.clip.type === 'audio';
 
         // Viewport-aware positioning
         const menuW = 240;
-        const menuH = 480;
+        const menuH = 360; // Better estimation of menu height
         const vw = window.innerWidth;
         const vh = window.innerHeight;
         const x = cm.x + menuW > vw ? cm.x - menuW : cm.x;
@@ -2945,10 +2773,9 @@ export default function Timeline({ height }: { height: number }) {
             type: 'item', label: 'Delete', icon: <Trash2 size={12} />, shortcut: '⌫', danger: true,
             action: () => { removeClip(cm.clip.id); closeContextMenu(); }
           },
-          { type: 'sep' },
           {
-            type: 'item', label: 'Split at playhead', icon: <Scissors size={12} />, shortcut: 'S',
-            action: () => { splitClipAtPlayhead(); closeContextMenu(); }
+            type: 'item', label: 'Ripple Delete', icon: <Trash2 size={12} />, shortcut: '⇧ ⌫', danger: true,
+            action: () => { removeClip(cm.clip.id, true); closeContextMenu(); }
           },
           {
             type: 'item', label: 'Duplicate', icon: <Copy size={12} />,
@@ -2969,12 +2796,7 @@ export default function Timeline({ height }: { height: number }) {
             icon: <Power size={12} />,
             shortcut: 'V',
             action: () => {
-              setDeactivatedClips(prev => {
-                const next = new Set(prev);
-                if (next.has(cm.clip.id)) next.delete(cm.clip.id);
-                else next.add(cm.clip.id);
-                return next;
-              });
+              updateClip(cm.clip.id, { disabled: !cm.clip.disabled });
               closeContextMenu();
             }
           },
@@ -3100,77 +2922,13 @@ export default function Timeline({ height }: { height: number }) {
       )}
 
       {/* Voiceover Recording Modal */}
-      {showMicModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-[#1a1a20] border border-zinc-800 rounded-xl p-6 w-80 shadow-2xl space-y-4 text-center">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-              <h3 className="font-bold text-sm text-gray-200 flex items-center gap-2">
-                <Mic className="w-4 h-4 text-red-500 animate-pulse" />
-                Voiceover Recorder
-              </h3>
-              <button 
-                onClick={closeVoiceoverRecorder}
-                disabled={isRecording}
-                className="text-gray-500 hover:text-gray-300 transition text-xs"
-              >
-                Close
-              </button>
-            </div>
+      <VoiceoverRecorder isOpen={showMicModal} onClose={() => setShowMicModal(false)} />
 
-            {/* Visualizer and Timer */}
-            <div className="py-6 flex flex-col items-center justify-center space-y-3">
-              {/* Pulsing Outer Circle based on volume level */}
-              <div 
-                className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center transition-all duration-75"
-                style={{
-                  boxShadow: isRecording ? `0 0 ${20 + volumeLevel * 0.4}px rgba(239, 68, 68, ${0.2 + volumeLevel * 0.005})` : 'none',
-                  transform: isRecording ? `scale(${1 + volumeLevel * 0.002})` : 'scale(1)'
-                }}
-              >
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isRecording ? 'bg-red-600 animate-pulse' : 'bg-zinc-800'}`}>
-                  <Mic className="w-5 h-5 text-white" />
-                </div>
-              </div>
-
-              {/* Volume Meter Bar */}
-              {isRecording && (
-                <div className="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
-                  <div 
-                    className="bg-gradient-to-r from-green-500 via-yellow-500 to-red-500 h-full transition-all duration-75" 
-                    style={{ width: `${volumeLevel}%` }}
-                  />
-                </div>
-              )}
-
-              <div className="text-2xl font-mono font-bold text-gray-100">
-                {formatTimer(recordingTime)}
-              </div>
-              <p className="text-[10px] text-gray-500">
-                {isRecording ? "Recording your voice... Click Stop to save." : "Ready to record. Make sure your mic is allowed."}
-              </p>
-            </div>
-
-            {/* Controls */}
-            <div className="flex items-center justify-center gap-3">
-              {!isRecording ? (
-                <button
-                  onClick={startRecording}
-                  className="px-5 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-semibold shadow transition-all flex items-center gap-1.5 cursor-pointer"
-                >
-                  <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping" />
-                  Start Recording
-                </button>
-              ) : (
-                <button
-                  onClick={stopRecording}
-                  className="px-5 py-2 bg-zinc-200 hover:bg-white text-zinc-950 rounded-lg text-xs font-semibold shadow transition-all flex items-center gap-1.5 cursor-pointer"
-                >
-                  <span className="w-2.5 h-2.5 bg-zinc-950 rounded-sm" />
-                  Stop & Save
-                </button>
-              )}
-            </div>
-          </div>
+      {/* Premium custom non-blocking Toast notification */}
+      {timelineToast && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 bg-zinc-900/95 border border-zinc-700/60 rounded-xl shadow-2xl flex items-center gap-2.5 backdrop-blur-md animate-fade-in-up text-[11px] text-zinc-100 font-semibold max-w-[90vw]">
+          <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse shrink-0" />
+          <span>{timelineToast}</span>
         </div>
       )}
     </div>

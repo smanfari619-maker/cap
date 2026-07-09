@@ -1,10 +1,16 @@
 import React, { useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Sparkles, Image as ImageIcon, Music, Download, 
-  Video, RefreshCw, AlertTriangle, AlertCircle, CheckCircle
+  Video, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, X
 } from 'lucide-react';
 
-export default function LipSyncTool() {
+interface LipSyncToolProps {
+  renderTrigger?: (open: () => void) => React.ReactNode;
+}
+
+export default function LipSyncTool({ renderTrigger }: LipSyncToolProps = {}) {
+  const [isOpen, setIsOpen] = useState(false);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -149,9 +155,21 @@ export default function LipSyncTool() {
 
   const activeSteps = getSteps();
 
-  return (
-    <div className="glass-panel rounded-2xl p-5 relative overflow-hidden flex flex-col gap-5 border border-zinc-800 bg-zinc-950/20">
+  const panel = (
+    <div className={`glass-panel rounded-2xl p-5 relative overflow-hidden flex flex-col gap-5 border border-zinc-800 w-full ${
+      renderTrigger ? 'bg-[#111113] max-w-lg shadow-2xl' : 'bg-gradient-to-br from-violet-500/10 via-fuchsia-500/5 to-transparent hover:border-violet-500/30 transition-all duration-300'
+    }`}>
       
+      {/* Close button in modal mode */}
+      {renderTrigger && (
+        <button 
+          onClick={() => setIsOpen(false)} 
+          className="absolute top-3 right-3 p-1 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer z-10"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      )}
+
       {/* Header */}
       <div>
         <div className="flex items-center justify-between">
@@ -250,7 +268,6 @@ export default function LipSyncTool() {
           {/* Settings / Sliders */}
           <div className="flex flex-col gap-3 px-1">
             
-            {/* Padding Slider */}
             {/* Still Mode Checkbox */}
             <div className="flex items-center gap-2.5 p-2 bg-zinc-900/20 rounded-xl border border-zinc-800/40 hover:border-violet-500/20 transition-all duration-200">
               <input 
@@ -295,7 +312,7 @@ export default function LipSyncTool() {
           <button
             onClick={runLipsync}
             disabled={!imageFile || !audioFile}
-            className="w-full py-2.5 px-4 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 shadow-lg transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed bg-violet-600 hover:bg-violet-500 text-white"
+            className="w-full py-2.5 px-4 rounded-xl font-semibold text-xs flex items-center justify-center gap-2 shadow-lg transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed bg-violet-600 hover:bg-violet-500 text-white cursor-pointer"
           >
             <Sparkles className="w-4 h-4" />
             Synthesize Lip-Sync
@@ -364,7 +381,7 @@ export default function LipSyncTool() {
           <div className="flex gap-2">
             <button
               onClick={resetForm}
-              className="flex-1 py-2 px-3 rounded-xl font-medium text-xs border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/80 text-zinc-300 transition-colors flex items-center justify-center gap-1.5"
+              className="flex-1 py-2 px-3 rounded-xl font-medium text-xs border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/80 text-zinc-300 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               Reset Tool
@@ -372,7 +389,7 @@ export default function LipSyncTool() {
             <a
               href={resultVideoUrl}
               download="lipsync_offline.mp4"
-              className="flex-1 py-2 px-3 rounded-xl font-semibold text-xs bg-violet-600 hover:bg-violet-500 text-white transition-colors flex items-center justify-center gap-1.5 shadow-md"
+              className="flex-1 py-2 px-3 rounded-xl font-semibold text-xs bg-violet-600 hover:bg-violet-500 text-white transition-colors flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
               Download MP4
@@ -422,7 +439,7 @@ export default function LipSyncTool() {
 
           <button
             onClick={isMissingModels ? resetForm : runLipsync}
-            className="w-full py-2 rounded-xl font-semibold text-xs bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-200 transition-colors flex items-center justify-center gap-1.5"
+            className="w-full py-2 rounded-xl font-semibold text-xs bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-200 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5" />
             {isMissingModels ? 'Clear files' : 'Try Again'}
@@ -432,4 +449,20 @@ export default function LipSyncTool() {
 
     </div>
   );
+
+  if (renderTrigger) {
+    return (
+      <>
+        {renderTrigger(() => setIsOpen(true))}
+        {isOpen && createPortal(
+          <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+            {panel}
+          </div>,
+          document.body
+        )}
+      </>
+    );
+  }
+
+  return panel;
 }

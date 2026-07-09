@@ -22,6 +22,7 @@ interface EditorState {
   // Watermark removal
   watermarkRegion: WatermarkRegion | null;
   watermarkDrawMode: boolean;
+  toolMode: 'select' | 'razor';
   
   // History states
   past: string[];
@@ -38,19 +39,23 @@ interface EditorState {
   setUpscaleEnabled: (enabled: boolean) => void;
   setWatermarkRegion: (region: WatermarkRegion | null) => void;
   setWatermarkDrawMode: (active: boolean) => void;
+  setToolMode: (mode: 'select' | 'razor') => void;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
   
   // Timeline Mutations
   updateTracks: (tracks: TimelineTrack[], skipHistory?: boolean) => Promise<void>;
   addClip: (trackId: string, clip: Omit<TimelineClip, 'trackId'>) => Promise<void>;
-  removeClip: (clipId: string) => Promise<void>;
+  removeClip: (clipId: string, ripple?: boolean) => Promise<void>;
   splitClipAtPlayhead: () => Promise<void>;
   updateClip: (clipId: string, updates: Partial<TimelineClip>) => Promise<void>;
   addTrack: (type: TimelineTrack['type']) => Promise<void>;
   removeTrack: (trackId: string) => Promise<void>;
   reorderTrack: (trackId: string, direction: 'up' | 'down') => Promise<void>;
   updateMarkers: (markers: TimelineMarker[]) => Promise<void>;
+  createSnapshot: (label: string) => Promise<void>;
+  restoreSnapshot: (versionId: string) => Promise<void>;
+  deleteSnapshot: (versionId: string) => Promise<void>;
 }
 
 const clipsOverlap = (a: TimelineClip, b: TimelineClip): boolean => {
@@ -178,6 +183,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // Watermark removal
   watermarkRegion: null,
   watermarkDrawMode: false,
+  toolMode: 'select',
   
   // History initial state
   past: [],
@@ -269,6 +275,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!active) return;
     // Clear any previous region when entering draw mode
     set({ watermarkRegion: null });
+  },
+
+  setToolMode: (mode: 'select' | 'razor') => {
+    set({ toolMode: mode });
   },
 
   undo: async () => {
@@ -397,14 +407,43 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     await get().updateTracks(tracks);
   },
 
-  removeClip: async (clipId: string) => {
+  removeClip: async (clipId: string, ripple = false) => {
     const { project, selectedClipId } = get();
     if (!project) return;
 
-    const tracks = project.tracks.map(t => ({
-      ...t,
-      clips: t.clips.filter(c => c.id !== clipId)
-    }));
+    let deletedClip: TimelineClip | null = null;
+    let trackId = '';
+
+    for (const track of project.tracks) {
+      const found = track.clips.find(c => c.id === clipId);
+      if (found) {
+        deletedClip = found;
+        trackId = track.id;
+        break;
+      }
+    }
+
+    if (!deletedClip) return;
+
+    const tracks = project.tracks.map(t => {
+      if (t.id !== trackId) return t;
+
+      const filteredClips = t.clips.filter(c => c.id !== clipId);
+      if (!ripple) {
+        return { ...t, clips: filteredClips };
+      }
+
+      const shiftMs = deletedClip!.durationMs;
+      const posThreshold = deletedClip!.positionMs;
+      const shiftedClips = filteredClips.map(c => {
+        if (c.positionMs > posThreshold) {
+          return { ...c, positionMs: Math.max(posThreshold, c.positionMs - shiftMs) };
+        }
+        return c;
+      });
+
+      return { ...t, clips: shiftedClips };
+    });
 
     const nextSelected = selectedClipId === clipId ? null : selectedClipId;
     const nextSelectedIds = get().selectedClipIds.filter(id => id !== clipId);
@@ -543,5 +582,41 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       future: []
     });
     await db.projects.put(updatedProject);
+  },
+
+  createSnapshot: async (label: string) => {
+    const { project } = get();
+    if (!project) return;
+    const versionId = `ver-${Math.random().toString(36).substring(2, 9)}`;
+    const snapshot = {
+      id: versionId,
+      projectId: project.id,
+      label,
+      projectData: JSON.stringify(project),
+      createdAt: new Date()
+    };
+    await db.projectVersions.add(snapshot);
+  },
+
+  restoreSnapshot: async (versionId: string) => {
+    const version = await db.projectVersions.get(versionId);
+    if (!version) return;
+    const restoredProject = JSON.parse(version.projectData);
+    
+    const { project, past } = get();
+    if (project) {
+      const currentSerialized = JSON.stringify(project);
+      set({
+        past: [...past, currentSerialized].slice(-50),
+        future: []
+      });
+    }
+
+    set({ project: restoredProject });
+    await db.projects.put(restoredProject);
+  },
+
+  deleteSnapshot: async (versionId: string) => {
+    await db.projectVersions.delete(versionId);
   },
 }));

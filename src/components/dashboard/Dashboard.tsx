@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { 
-  Plus, Trash2, Video, Film, Folder, Download, Upload, 
+  Plus, Trash2, Video, Film, Folder, FolderOpen, Download, Upload, 
   Smartphone, Tv, Sparkles, Search, HardDrive, Cpu, 
   Keyboard, Clock, ShieldCheck, Settings, HelpCircle, 
-  Bell, User, Scissors, MoreVertical, X
+  Bell, User, Scissors, MoreVertical, X, Share2, Cloud, Link, Check,
+  ChevronDown, ChevronRight
 } from 'lucide-react';
 import { db, type Project } from '../../lib/db';
 import { useEditorStore } from '../../store/editorStore';
@@ -12,6 +13,9 @@ import { deleteDirectoryFromOPFS } from '../../lib/opfs';
 import jellycutLogo from '../../assets/jellycut_logo.svg';
 import WatermarkRemoverTool from './WatermarkRemoverTool';
 import LipSyncTool from './LipSyncTool';
+import StoryCutterTool from './StoryCutterTool';
+import { BUILTIN_TEMPLATES, applyTemplate } from '../../lib/template-engine';
+import { downloadProjectBackup, generateShareLink } from '../../lib/cloud-sync';
 
 export default function Dashboard() {
   const loadProject = useEditorStore(state => state.loadProject);
@@ -38,17 +42,17 @@ export default function Dashboard() {
   // Mobile layout state
   const [mobileTab, setMobileTab] = useState<'edit' | 'templates' | 'inbox' | 'me'>('edit');
   const [showMobileWatermarkTool, setShowMobileWatermarkTool] = useState(false);
-  const [showMobileLipsyncTool, setShowMobileLipsyncTool] = useState(false);
   const [activeProjectMenuId, setActiveProjectMenuId] = useState<string | null>(null);
   const [projectToDeleteId, setProjectToDeleteId] = useState<string | null>(null);
 
-  // templates config
-  const templates = [
-    { id: 'yt', title: 'YouTube Landscape', ratio: '16-9', w: 1920, h: 1080, icon: Tv, bg: 'from-sky-500/10 via-blue-500/5 to-transparent', border: 'hover:border-sky-500/50', iconBg: 'bg-sky-500/10 text-sky-400', desc: '16:9 • Standard horizontal format' },
-    { id: 'tiktok', title: 'TikTok / Reel', ratio: '9-16', w: 1080, h: 1920, icon: Smartphone, bg: 'from-pink-500/10 via-rose-500/5 to-transparent', border: 'hover:border-pink-500/50', iconBg: 'bg-pink-500/10 text-pink-400', desc: '9:16 • Mobile portrait format' },
-    { id: 'insta', title: 'Instagram Square', ratio: '1-1', w: 1080, h: 1080, icon: Film, bg: 'from-purple-500/10 via-fuchsia-500/5 to-transparent', border: 'hover:border-purple-500/50', iconBg: 'bg-purple-500/10 text-purple-400', desc: '1:1 • Square post format' },
-    { id: 'cinematic', title: 'Cinematic Short', ratio: '21-9', w: 2560, h: 1080, icon: Video, bg: 'from-emerald-500/10 via-teal-500/5 to-transparent', border: 'hover:border-emerald-500/50', iconBg: 'bg-emerald-500/10 text-emerald-400', desc: '21:9 • Ultra-wide aspect ratio' }
-  ];
+  // Rich built-in templates from template engine
+  const templates = BUILTIN_TEMPLATES;
+
+  // Share link state
+  const [shareProjectId, setShareProjectId] = useState<string | null>(null);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [isGeneratingShare, setIsGeneratingShare] = useState(false);
+  const [copiedShareLink, setCopiedShareLink] = useState(false);
 
   // Fetch storage estimates
   useEffect(() => {
@@ -125,25 +129,38 @@ export default function Dashboard() {
     loadProject(projectId);
   };
 
-  const handleCreateTemplate = async (templateTitle: string, w: number, h: number) => {
-    const projectId = Math.random().toString(36).substring(2, 9);
-    const newProject: Project = {
-      id: projectId,
-      title: `My ${templateTitle}`,
-      width: w,
-      height: h,
-      fps: 30,
-      tracks: [
-        { id: 't1', name: 'Text Track 1', type: 'text', clips: [] },
-        { id: 'v1', name: 'Video Track 1', type: 'video', clips: [] },
-        { id: 'a1', name: 'Audio Track 1', type: 'audio', clips: [] }
-      ],
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-
+  const handleCreateTemplate = async (template: typeof BUILTIN_TEMPLATES[0]) => {
+    const newProject = applyTemplate(template);
     await db.projects.add(newProject);
-    loadProject(projectId);
+    loadProject(newProject.id);
+  };
+
+  const handleShareProject = async (project: Project, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShareProjectId(project.id);
+    setShareUrl(null);
+    setCopiedShareLink(false);
+    setIsGeneratingShare(true);
+    try {
+      const url = await generateShareLink(project);
+      setShareUrl(url);
+    } catch (err: any) {
+      alert('Could not generate share link: ' + err.message);
+      setShareProjectId(null);
+    } finally {
+      setIsGeneratingShare(false);
+    }
+  };
+
+  const handleCopyShareLink = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopiedShareLink(true);
+      setTimeout(() => setCopiedShareLink(false), 2500);
+    } catch {
+      /* noop */
+    }
   };
 
   const handleDeleteProject = async (projectId: string, e: React.MouseEvent) => {
@@ -267,6 +284,28 @@ export default function Dashboard() {
     return matchesSearch && matchesRatio;
   });
 
+  // Folder grouping for Story Cutter batches
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
+  const toggleFolder = (fid: string) => {
+    setCollapsedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(fid)) next.delete(fid); else next.add(fid);
+      return next;
+    });
+  };
+  const folderMap = new Map<string, { folderName: string; projects: Project[] }>();
+  const soloProjects: Project[] = [];
+  for (const p of filteredProjects) {
+    if (p.folderId) {
+      if (!folderMap.has(p.folderId)) folderMap.set(p.folderId, { folderName: p.folderName || 'Folder', projects: [] });
+      folderMap.get(p.folderId)!.projects.push(p);
+    } else {
+      soloProjects.push(p);
+    }
+  }
+  const folderGroups = Array.from(folderMap.entries());
+
+
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden bg-zinc-950 text-zinc-100 relative">
       {/* Decorative gradients */}
@@ -310,34 +349,79 @@ export default function Dashboard() {
           {/* LEFT/MAIN WORKSPACE (8 Columns on Large Screen) */}
           <div className="lg:col-span-8 flex flex-col gap-10">
             
-            {/* Start with a Template Section */}
+            {/* Rich Template Gallery */}
             <div>
               <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                 <Sparkles className="w-3.5 h-3.5 text-violet-400" /> Start with a Template
               </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                 {templates.map((temp) => {
-                  const IconComponent = temp.icon;
+                  const ratioLabel = temp.width === 1920 && temp.height === 1080 ? '16:9'
+                    : temp.width === 1080 && temp.height === 1920 ? '9:16'
+                    : temp.width === 1080 && temp.height === 1080 ? '1:1'
+                    : temp.width === 2560 ? '21:9'
+                    : `${temp.width}×${temp.height}`;
+                  const categoryColors: Record<string, string> = {
+                    social: 'bg-pink-500/15 text-pink-400 border-pink-500/20',
+                    marketing: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20',
+                    cinematic: 'bg-amber-500/15 text-amber-400 border-amber-500/20',
+                    educational: 'bg-sky-500/15 text-sky-400 border-sky-500/20',
+                    podcast: 'bg-violet-500/15 text-violet-400 border-violet-500/20',
+                  };
+                  const catColor = categoryColors[temp.category] || 'bg-zinc-800 text-zinc-400 border-zinc-700';
+                  const durationLabel = temp.durationMs >= 60000
+                    ? `${Math.round(temp.durationMs / 60000)}m`
+                    : `${Math.round(temp.durationMs / 1000)}s`;
                   return (
                     <div
                       key={temp.id}
-                      onClick={() => handleCreateTemplate(temp.title, temp.w, temp.h)}
-                      className={`group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-850 bg-zinc-900/25 p-5 hover:bg-zinc-900/50 hover:shadow-xl transition duration-300 cursor-pointer ${temp.border} bg-gradient-to-br ${temp.bg}`}
+                      onClick={() => handleCreateTemplate(temp)}
+                      className={`group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-850 bg-zinc-900/25 p-5 hover:bg-zinc-900/50 hover:shadow-xl transition duration-300 cursor-pointer hover:border-zinc-700 bg-gradient-to-br ${temp.gradient}`}
                     >
-                      <div className="flex items-start justify-between">
-                        <div className={`w-10 h-10 rounded-xl ${temp.iconBg} flex items-center justify-center group-hover:scale-110 transition duration-300`}>
-                          <IconComponent className="w-5 h-5" />
+                      {/* Top Row */}
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${catColor}`}>
+                            {temp.category}
+                          </span>
+                          <span className="text-[9px] text-zinc-500 font-semibold px-2 py-0.5 bg-zinc-900/60 rounded border border-zinc-800">
+                            {ratioLabel}
+                          </span>
                         </div>
-                        <span className="text-[10px] text-zinc-500 font-semibold px-2 py-0.5 bg-zinc-900/55 rounded-md border border-zinc-800">
-                          {temp.ratio}
-                        </span>
+                        <span className="text-[9px] text-zinc-600 font-mono">{durationLabel}</span>
                       </div>
-                      <div className="mt-5">
-                        <h3 className="font-bold text-zinc-200 group-hover:text-white transition-colors">{temp.title}</h3>
-                        <p className="text-xs text-zinc-500 mt-1 leading-snug">{temp.desc}</p>
+
+                      {/* Mini aspect ratio visual */}
+                      <div className="mb-4 flex items-center justify-center h-16">
+                        <div
+                          className="rounded border border-zinc-800 bg-zinc-900/60 flex items-center justify-center transition-transform group-hover:scale-105 duration-300"
+                          style={{
+                            width: temp.height > temp.width ? '36px' : temp.width === temp.height ? '48px' : '72px',
+                            height: temp.height > temp.width ? '64px' : temp.width === temp.height ? '48px' : '30px',
+                          }}
+                        >
+                          <Film className="w-3 h-3 text-zinc-600" />
+                        </div>
                       </div>
+
+                      {/* Title & Description */}
+                      <div>
+                        <h3 className="font-bold text-zinc-200 group-hover:text-white transition-colors text-sm">{temp.title}</h3>
+                        <p className="text-xs text-zinc-500 mt-1 leading-snug line-clamp-2">{temp.description}</p>
+                      </div>
+
+                      {/* Tags */}
+                      <div className="mt-3 flex flex-wrap gap-1">
+                        {temp.tags.slice(0, 3).map((tag) => (
+                          <span key={tag} className="text-[8px] px-1.5 py-0.5 rounded bg-zinc-900/70 text-zinc-500 border border-zinc-800">
+                            #{tag}
+                          </span>
+                        ))}
+                      </div>
+
+                      {/* Hover CTA */}
                       <div className="absolute right-4 bottom-4 opacity-0 group-hover:opacity-100 transition duration-300 flex items-center gap-1 text-[10px] uppercase font-bold tracking-wider px-2.5 py-1 bg-violet-600 border border-violet-500 text-white rounded-lg">
-                        Create
+                        Use Template
                       </div>
                     </div>
                   );
@@ -402,118 +486,140 @@ export default function Dashboard() {
                   )}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                  {filteredProjects.map((proj) => {
-                    const durMs = getProjectDurationMs(proj);
-                    const ratio = proj.width / proj.height;
-                    let ratioLabel = '16:9';
-                    let previewAspect = 'aspect-video';
-                    
-                    if (Math.abs(ratio - 9/16) < 0.1) {
-                      ratioLabel = '9:16';
-                      previewAspect = 'aspect-[9/16] max-h-[160px] mx-auto';
-                    } else if (Math.abs(ratio - 1) < 0.1) {
-                      ratioLabel = '1:1';
-                      previewAspect = 'aspect-square max-h-[160px] mx-auto';
-                    } else if (Math.abs(ratio - 21/9) < 0.1) {
-                      ratioLabel = '21:9';
-                      previewAspect = 'aspect-[21/9]';
-                    }
-
+                <div className="flex flex-col gap-6">
+                  {/* ── Folder groups (Story Cutter batches) ── */}
+                  {folderGroups.map(([fid, group]) => {
+                    const isCollapsed = collapsedFolders.has(fid);
                     return (
-                      <div
-                        key={proj.id}
-                        onClick={() => loadProject(proj.id)}
-                        className="group flex flex-col overflow-hidden rounded-2xl border border-zinc-850/80 bg-zinc-900/20 hover:bg-zinc-900/40 hover:border-zinc-750 transition duration-300 cursor-pointer hover:shadow-xl hover:shadow-violet-950/5 relative"
-                      >
-                        {/* Project Card Video Aspect Ratio Preview Box */}
-                        <div className="p-3 bg-zinc-950/40 border-b border-zinc-900/80 flex items-center justify-center overflow-hidden h-[130px] relative">
-                          <div className={`w-full rounded bg-gradient-to-br from-zinc-800/60 to-zinc-900/60 border border-zinc-800 flex flex-col items-center justify-center relative overflow-hidden ${previewAspect} transition-transform group-hover:scale-[1.01] duration-300`}>
-                            {/* Abstract Timeline Preview Lines */}
-                            <div className="absolute inset-x-2 bottom-2 flex flex-col gap-1 opacity-45 pointer-events-none">
-                              <div className="h-1 bg-violet-500 rounded-full w-2/3" />
-                              <div className="h-1 bg-sky-500 rounded-full w-4/5" />
-                              <div className="h-1 bg-zinc-650 rounded-full w-1/2" />
-                            </div>
-
-                            {/* Center Aspect Stamp Icon */}
-                            <div className="rounded-full bg-zinc-900/80 p-2.5 border border-zinc-800 group-hover:bg-violet-600/95 group-hover:scale-110 group-hover:border-violet-500 transition duration-300 z-10">
-                              <Video className="w-4 h-4 text-zinc-400 group-hover:text-white" />
-                            </div>
-
-                            {/* Floating aspect & timecode tag */}
-                            <div className="absolute top-1.5 right-1.5 flex gap-1.5 z-10">
-                              <span className="text-[8px] tracking-wide font-bold px-1.5 py-0.5 rounded bg-zinc-900/90 text-zinc-300 border border-zinc-800 select-none">
-                                {ratioLabel}
-                              </span>
-                              <span className="text-[8px] tracking-wide font-mono font-bold px-1.5 py-0.5 rounded bg-zinc-900/90 text-sky-400 border border-zinc-850 select-none">
-                                {formatTimecode(durMs)}
-                              </span>
-                            </div>
+                      <div key={fid} className="rounded-2xl border border-violet-900/30 bg-violet-950/10 overflow-hidden">
+                        {/* Folder header */}
+                        <button
+                          onClick={() => toggleFolder(fid)}
+                          className="w-full flex items-center gap-3 px-4 py-3 hover:bg-violet-950/20 transition cursor-pointer text-left"
+                        >
+                          {isCollapsed
+                            ? <ChevronRight className="w-4 h-4 text-violet-400 shrink-0" />
+                            : <ChevronDown className="w-4 h-4 text-violet-400 shrink-0" />
+                          }
+                          <FolderOpen className="w-4 h-4 text-violet-400 shrink-0" />
+                          <span className="text-xs font-bold text-violet-300 flex-1 truncate">{group.folderName}</span>
+                          <span className="text-[9px] px-2 py-0.5 rounded-full bg-violet-900/40 border border-violet-800/40 text-violet-400 font-semibold shrink-0">
+                            {group.projects.length} clips
+                          </span>
+                        </button>
+                        {/* Folder content grid */}
+                        {!isCollapsed && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 pt-0">
+                            {group.projects.map((proj) => {
+                              const durMs = getProjectDurationMs(proj);
+                              const ratio = proj.width / proj.height;
+                              let ratioLabel = '16:9';
+                              let previewAspect = 'aspect-video';
+                              if (Math.abs(ratio - 9/16) < 0.1) { ratioLabel = '9:16'; previewAspect = 'aspect-[9/16] max-h-[160px] mx-auto'; }
+                              else if (Math.abs(ratio - 1) < 0.1) { ratioLabel = '1:1'; previewAspect = 'aspect-square max-h-[160px] mx-auto'; }
+                              else if (Math.abs(ratio - 21/9) < 0.1) { ratioLabel = '21:9'; previewAspect = 'aspect-[21/9]'; }
+                              return (
+                                <div key={proj.id} onClick={() => loadProject(proj.id)} className="group flex flex-col overflow-hidden rounded-xl border border-violet-900/20 bg-zinc-900/30 hover:bg-zinc-900/50 hover:border-violet-600/40 transition duration-300 cursor-pointer relative">
+                                  <div className="p-3 bg-zinc-950/40 border-b border-zinc-900/80 flex items-center justify-center overflow-hidden h-[110px] relative">
+                                    <div className={`w-full rounded bg-gradient-to-br from-violet-900/20 to-zinc-900/60 border border-zinc-800 flex flex-col items-center justify-center relative overflow-hidden ${previewAspect} transition-transform group-hover:scale-[1.01] duration-300`}>
+                                      <div className="absolute inset-x-2 bottom-2 flex flex-col gap-1 opacity-45 pointer-events-none">
+                                        <div className="h-1 bg-violet-500 rounded-full w-2/3" />
+                                        <div className="h-1 bg-sky-500 rounded-full w-4/5" />
+                                      </div>
+                                      <div className="rounded-full bg-zinc-900/80 p-2 border border-zinc-800 group-hover:bg-violet-600/95 group-hover:border-violet-500 transition duration-300 z-10">
+                                        <Video className="w-3.5 h-3.5 text-zinc-400 group-hover:text-white" />
+                                      </div>
+                                      <div className="absolute top-1.5 right-1.5 flex gap-1 z-10">
+                                        <span className="text-[7px] font-bold px-1.5 py-0.5 rounded bg-zinc-900/90 text-zinc-300 border border-zinc-800">{ratioLabel}</span>
+                                        <span className="text-[7px] font-mono font-bold px-1.5 py-0.5 rounded bg-zinc-900/90 text-sky-400 border border-zinc-850">{formatTimecode(durMs)}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="p-3 flex-1 flex flex-col justify-between">
+                                    <h4 className="font-semibold text-zinc-300 line-clamp-1 group-hover:text-zinc-100 transition-colors text-xs">{proj.title}</h4>
+                                    <div className="mt-3 flex items-center justify-between border-t border-zinc-900 pt-2 text-[9px] text-zinc-500">
+                                      <span className="flex items-center gap-1"><Clock className="w-2.5 h-2.5" /> {new Date(proj.updatedAt).toLocaleDateString()}</span>
+                                      <div className="flex gap-1">
+                                        <button onClick={(e) => { e.stopPropagation(); downloadProjectBackup(proj); }} title="Download backup" className="rounded p-1 hover:bg-zinc-800 hover:text-zinc-300 text-zinc-650 transition cursor-pointer"><Download className="w-3 h-3" /></button>
+                                        <button onClick={(e) => handleDeleteProject(proj.id, e)} title="Delete" className="rounded p-1 hover:bg-red-950/30 hover:text-red-400 text-zinc-650 transition cursor-pointer"><Trash2 className="w-3 h-3" /></button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
-                        </div>
-
-                        {/* Card Meta Content */}
-                        <div className="p-4 flex-1 flex flex-col justify-between">
-                          <div>
-                            <h4 className="font-bold text-zinc-200 line-clamp-1 group-hover:text-zinc-100 transition-colors">
-                              {proj.title}
-                            </h4>
-                            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                              <span className="text-[9px] font-bold px-2 py-0.5 bg-zinc-900 border border-zinc-850 rounded text-zinc-400">
-                                {proj.width}x{proj.height}
-                              </span>
-                              <span className="text-[9px] font-bold px-2 py-0.5 bg-zinc-900 border border-zinc-850 rounded text-zinc-400">
-                                {proj.fps} FPS
-                              </span>
-                            </div>
-                            
-                            <div className="mt-4 grid grid-cols-2 gap-2 text-[10px] text-zinc-500">
-                              <p className="flex items-center gap-1">
-                                <Folder className="w-3.5 h-3.5 text-zinc-700" />
-                                {proj.tracks?.length || 0} Tracks
-                              </p>
-                              <p className="flex items-center gap-1">
-                                <Film className="w-3.5 h-3.5 text-zinc-700" />
-                                {proj.tracks?.reduce((acc, t) => acc + (t.clips?.length || 0), 0) || 0} Clips
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="mt-5 flex items-center justify-between border-t border-zinc-900 pt-3 text-[10px] text-zinc-500">
-                            <span className="flex items-center gap-1">
-                              <Clock className="w-3 h-3" />
-                              Edited {new Date(proj.updatedAt).toLocaleDateString()}
-                            </span>
-                            
-                            <div className="flex gap-1.5">
-                              <button
-                                onClick={(e) => handleExportBackup(proj, e)}
-                                title="Download JSON backup"
-                                className="rounded-lg p-1.5 hover:bg-zinc-800 hover:text-zinc-300 text-zinc-650 transition cursor-pointer"
-                              >
-                                <Download className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={(e) => handleDeleteProject(proj.id, e)}
-                                title="Delete project"
-                                className="rounded-lg p-1.5 hover:bg-red-950/30 hover:text-red-400 text-zinc-650 transition cursor-pointer"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
+                        )}
                       </div>
                     );
                   })}
+
+                  {/* ── Solo projects ── */}
+                  {soloProjects.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                      {soloProjects.map((proj) => {
+                        const durMs = getProjectDurationMs(proj);
+                        const ratio = proj.width / proj.height;
+                        let ratioLabel = '16:9';
+                        let previewAspect = 'aspect-video';
+                        if (Math.abs(ratio - 9/16) < 0.1) { ratioLabel = '9:16'; previewAspect = 'aspect-[9/16] max-h-[160px] mx-auto'; }
+                        else if (Math.abs(ratio - 1) < 0.1) { ratioLabel = '1:1'; previewAspect = 'aspect-square max-h-[160px] mx-auto'; }
+                        else if (Math.abs(ratio - 21/9) < 0.1) { ratioLabel = '21:9'; previewAspect = 'aspect-[21/9]'; }
+                        return (
+                          <div key={proj.id} onClick={() => loadProject(proj.id)} className="group flex flex-col overflow-hidden rounded-2xl border border-zinc-850/80 bg-zinc-900/20 hover:bg-zinc-900/40 hover:border-zinc-750 transition duration-300 cursor-pointer hover:shadow-xl hover:shadow-violet-950/5 relative">
+                            <div className="p-3 bg-zinc-950/40 border-b border-zinc-900/80 flex items-center justify-center overflow-hidden h-[130px] relative">
+                              <div className={`w-full rounded bg-gradient-to-br from-zinc-800/60 to-zinc-900/60 border border-zinc-800 flex flex-col items-center justify-center relative overflow-hidden ${previewAspect} transition-transform group-hover:scale-[1.01] duration-300`}>
+                                <div className="absolute inset-x-2 bottom-2 flex flex-col gap-1 opacity-45 pointer-events-none">
+                                  <div className="h-1 bg-violet-500 rounded-full w-2/3" />
+                                  <div className="h-1 bg-sky-500 rounded-full w-4/5" />
+                                  <div className="h-1 bg-zinc-650 rounded-full w-1/2" />
+                                </div>
+                                <div className="rounded-full bg-zinc-900/80 p-2.5 border border-zinc-800 group-hover:bg-violet-600/95 group-hover:scale-110 group-hover:border-violet-500 transition duration-300 z-10">
+                                  <Video className="w-4 h-4 text-zinc-400 group-hover:text-white" />
+                                </div>
+                                <div className="absolute top-1.5 right-1.5 flex gap-1.5 z-10">
+                                  <span className="text-[8px] tracking-wide font-bold px-1.5 py-0.5 rounded bg-zinc-900/90 text-zinc-300 border border-zinc-800 select-none">{ratioLabel}</span>
+                                  <span className="text-[8px] tracking-wide font-mono font-bold px-1.5 py-0.5 rounded bg-zinc-900/90 text-sky-400 border border-zinc-850 select-none">{formatTimecode(durMs)}</span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="p-4 flex-1 flex flex-col justify-between">
+                              <div>
+                                <h4 className="font-bold text-zinc-200 line-clamp-1 group-hover:text-zinc-100 transition-colors">{proj.title}</h4>
+                                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                  <span className="text-[9px] font-bold px-2 py-0.5 bg-zinc-900 border border-zinc-850 rounded text-zinc-400">{proj.width}x{proj.height}</span>
+                                  <span className="text-[9px] font-bold px-2 py-0.5 bg-zinc-900 border border-zinc-850 rounded text-zinc-400">{proj.fps} FPS</span>
+                                </div>
+                                <div className="mt-4 grid grid-cols-2 gap-2 text-[10px] text-zinc-500">
+                                  <p className="flex items-center gap-1"><Folder className="w-3.5 h-3.5 text-zinc-700" />{proj.tracks?.length || 0} Tracks</p>
+                                  <p className="flex items-center gap-1"><Film className="w-3.5 h-3.5 text-zinc-700" />{proj.tracks?.reduce((acc, t) => acc + (t.clips?.length || 0), 0) || 0} Clips</p>
+                                </div>
+                              </div>
+                              <div className="mt-5 flex items-center justify-between border-t border-zinc-900 pt-3 text-[10px] text-zinc-500">
+                                <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> Edited {new Date(proj.updatedAt).toLocaleDateString()}</span>
+                                <div className="flex gap-1.5">
+                                  <button onClick={(e) => { e.stopPropagation(); downloadProjectBackup(proj); }} title="Download .jlycut backup" className="rounded-lg p-1.5 hover:bg-zinc-800 hover:text-zinc-300 text-zinc-650 transition cursor-pointer"><Download className="w-3.5 h-3.5" /></button>
+                                  <button onClick={(e) => handleShareProject(proj, e)} title="Share project link" className="rounded-lg p-1.5 hover:bg-violet-950/40 hover:text-violet-400 text-zinc-650 transition cursor-pointer"><Share2 className="w-3.5 h-3.5" /></button>
+                                  <button onClick={(e) => handleDeleteProject(proj.id, e)} title="Delete project" className="rounded-lg p-1.5 hover:bg-red-950/30 hover:text-red-400 text-zinc-650 transition cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
+
               )}
             </div>
           </div>
 
           {/* RIGHT SIDEBAR PANEL (4 Columns on Large Screen) */}
           <div className="lg:col-span-4 flex flex-col gap-6">
+
+            {/* ── Story Cutter Standalone Tool ── */}
+            <StoryCutterTool />
 
             {/* ── Gemini Watermark Remover Standalone Tool ── */}
             <WatermarkRemoverTool />
@@ -623,6 +729,36 @@ export default function Dashboard() {
               />
             </div>
 
+            {/* Cloud Sync Panel */}
+            <div className="glass-panel rounded-2xl p-5">
+              <h3 className="text-xs font-bold text-zinc-350 uppercase tracking-wider mb-4 flex items-center gap-2">
+                <Cloud className="w-4 h-4 text-sky-400" /> Cloud Sync
+              </h3>
+              <div className="space-y-3">
+                <div className="flex items-start gap-2 bg-zinc-950/40 border border-zinc-900 rounded-xl p-3">
+                  <div className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center shrink-0">
+                    <Cloud className="w-4 h-4 text-sky-400" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-zinc-300">Offline — Local Only</p>
+                    <p className="text-[9px] text-zinc-500 mt-0.5 leading-relaxed">
+                      Projects are saved locally. Use <strong>Share</strong> (→) on any project card to generate a portable link.
+                    </p>
+                  </div>
+                </div>
+                <p className="text-[9px] text-zinc-600 leading-relaxed">
+                  To enable real cloud sync, set <code className="text-sky-500">VITE_CLOUD_ENDPOINT</code> in your environment to a Cloudflare Worker or Supabase endpoint.
+                </p>
+                <div className="flex gap-2">
+                  <label className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 hover:border-zinc-700 text-[10px] font-semibold text-zinc-400 hover:text-zinc-200 transition cursor-pointer">
+                    <Upload className="w-3.5 h-3.5" />
+                    Import .jlycut
+                    <input type="file" accept=".jlycut,.json" onChange={handleImportBackup} className="hidden" />
+                  </label>
+                </div>
+              </div>
+            </div>
+
             {/* Keyboard Shortcuts Cheat Sheet side widget */}
             <div className="glass-panel rounded-2xl p-5">
               <h3 className="text-xs font-bold text-zinc-350 uppercase tracking-wider mb-4 flex items-center gap-2">
@@ -673,6 +809,27 @@ export default function Dashboard() {
               </div>
             </div>
 
+            {/* Story Cutter Quick Tool Card */}
+            <StoryCutterTool
+              renderTrigger={(open) => (
+                <div 
+                  onClick={open}
+                  className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-4 mb-3 flex items-center justify-between cursor-pointer hover:border-violet-500/30 transition group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-violet-500/10 text-violet-400 flex items-center justify-center group-hover:scale-105 transition">
+                      <Scissors className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-xs text-zinc-200">Story Cutter</h4>
+                      <p className="text-[10px] text-zinc-500 mt-0.5">Seamlessly split long videos into perfectly timed segments</p>
+                    </div>
+                  </div>
+                  <span className="text-zinc-500 group-hover:text-zinc-300 transition text-xs font-semibold mr-1">&gt;</span>
+                </div>
+              )}
+            />
+
             {/* Watermark Remover Quick Tool Card */}
             <div 
               onClick={() => setShowMobileWatermarkTool(true)}
@@ -691,21 +848,25 @@ export default function Dashboard() {
             </div>
 
             {/* Wav2Lip Lipsync Quick Tool Card */}
-            <div 
-              onClick={() => setShowMobileLipsyncTool(true)}
-              className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-4 mb-6 flex items-center justify-between cursor-pointer hover:border-violet-500/30 transition group"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-violet-500/10 text-violet-400 flex items-center justify-center group-hover:scale-105 transition">
-                  <Sparkles className="w-5 h-5" />
+            <LipSyncTool
+              renderTrigger={(open) => (
+                <div 
+                  onClick={open}
+                  className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-4 mb-6 flex items-center justify-between cursor-pointer hover:border-violet-500/30 transition group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-violet-500/10 text-violet-400 flex items-center justify-center group-hover:scale-105 transition">
+                      <Sparkles className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-xs text-zinc-200">Jellycut 3D AI Avatar</h4>
+                      <p className="text-[10px] text-zinc-500 mt-0.5">Sync face portraits to spoken voice clips locally</p>
+                    </div>
+                  </div>
+                  <span className="text-zinc-500 group-hover:text-zinc-300 transition text-xs font-semibold mr-1">&gt;</span>
                 </div>
-                <div>
-                  <h4 className="font-bold text-xs text-zinc-200">Jellycut 3D AI Avatar</h4>
-                  <p className="text-[10px] text-zinc-500 mt-0.5">Sync face portraits to spoken voice clips locally</p>
-                </div>
-              </div>
-              <span className="text-zinc-500 group-hover:text-zinc-300 transition text-xs font-semibold mr-1">&gt;</span>
-            </div>
+              )}
+            />
 
             {/* New Project Gradient Button */}
             <div 
@@ -726,18 +887,22 @@ export default function Dashboard() {
               </div>
               <div className="flex gap-3 overflow-x-auto scrollbar-hide pb-2 w-full max-w-full">
                 {templates.map((temp) => {
-                  const IconComp = temp.icon;
+                  const ratioLabel = temp.width === 1920 && temp.height === 1080 ? '16:9'
+                    : temp.width === 1080 && temp.height === 1920 ? '9:16'
+                    : temp.width === 1080 && temp.height === 1080 ? '1:1'
+                    : temp.width === 2560 ? '21:9'
+                    : `${temp.width}×${temp.height}`;
                   return (
-                    <div 
+                    <div
                       key={temp.id}
-                      onClick={() => handleCreateTemplate(temp.title, temp.w, temp.h)}
-                      className={`flex-none w-36 rounded-xl border border-zinc-850 p-3 bg-gradient-to-br ${temp.bg} flex flex-col justify-between h-24 cursor-pointer`}
+                      onClick={() => handleCreateTemplate(temp)}
+                      className={`flex-none w-36 rounded-xl border border-zinc-850 p-3 bg-gradient-to-br ${temp.gradient} flex flex-col justify-between h-24 cursor-pointer`}
                     >
                       <div className="flex justify-between items-start">
-                        <div className={`w-7 h-7 rounded-lg ${temp.iconBg} flex items-center justify-center`}>
-                          <IconComp className="w-4 h-4" />
+                        <div className="w-7 h-7 rounded-lg bg-zinc-900/60 border border-zinc-800 flex items-center justify-center">
+                          <Film className="w-4 h-4 text-zinc-500" />
                         </div>
-                        <span className="text-[8px] text-zinc-550 px-1 bg-zinc-900/50 rounded border border-zinc-800">{temp.ratio}</span>
+                        <span className="text-[8px] text-zinc-550 px-1 bg-zinc-900/50 rounded border border-zinc-800">{ratioLabel}</span>
                       </div>
                       <span className="font-semibold text-[10px] text-zinc-200 truncate">{temp.title}</span>
                     </div>
@@ -847,22 +1012,26 @@ export default function Dashboard() {
             </h3>
             <div className="grid grid-cols-2 gap-3">
               {templates.map((temp) => {
-                const IconComp = temp.icon;
+                const ratioLabel = temp.width === 1920 && temp.height === 1080 ? '16:9'
+                  : temp.width === 1080 && temp.height === 1920 ? '9:16'
+                  : temp.width === 1080 && temp.height === 1080 ? '1:1'
+                  : temp.width === 2560 ? '21:9'
+                  : `${temp.width}×${temp.height}`;
                 return (
-                  <div 
+                  <div
                     key={temp.id}
-                    onClick={() => handleCreateTemplate(temp.title, temp.w, temp.h)}
-                    className={`rounded-xl border border-zinc-850 p-4 bg-gradient-to-br ${temp.bg} flex flex-col justify-between h-32 cursor-pointer hover:border-violet-500/50 transition`}
+                    onClick={() => handleCreateTemplate(temp)}
+                    className={`rounded-xl border border-zinc-850 p-4 bg-gradient-to-br ${temp.gradient} flex flex-col justify-between h-32 cursor-pointer hover:border-violet-500/50 transition`}
                   >
                     <div className="flex justify-between items-start">
-                      <div className={`w-8 h-8 rounded-lg ${temp.iconBg} flex items-center justify-center`}>
-                        <IconComp className="w-4 h-4" />
+                      <div className="w-8 h-8 rounded-lg bg-zinc-900/60 border border-zinc-800 flex items-center justify-center">
+                        <Film className="w-4 h-4 text-zinc-400" />
                       </div>
-                      <span className="text-[9px] text-zinc-550 px-1.5 py-0.5 bg-zinc-900/50 rounded border border-zinc-800">{temp.ratio}</span>
+                      <span className="text-[9px] text-zinc-550 px-1.5 py-0.5 bg-zinc-900/50 rounded border border-zinc-800">{ratioLabel}</span>
                     </div>
                     <div>
                       <span className="font-semibold text-xs text-zinc-100 block truncate">{temp.title}</span>
-                      <span className="text-[9px] text-zinc-500 block truncate mt-1">{temp.desc}</span>
+                      <span className="text-[9px] text-zinc-500 block truncate mt-1">{temp.description}</span>
                     </div>
                   </div>
                 );
@@ -1098,24 +1267,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Mobile Lipsync Full Screen Overlay */}
-      {showMobileLipsyncTool && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950 p-4 pb-12">
-          <div className="flex justify-between items-center mb-4 pb-2 border-b border-zinc-850">
-            <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-violet-400" />
-              Jellycut 3D AI Avatar
-            </h3>
-            <button 
-              onClick={() => setShowMobileLipsyncTool(false)}
-              className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-400"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          <LipSyncTool />
-        </div>
-      )}
 
       {/* Custom Delete Confirmation Modal */}
       {projectToDeleteId && (
@@ -1141,6 +1292,64 @@ export default function Dashboard() {
                 Delete
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share Link Modal */}
+      {shareProjectId && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-fade-in-up">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl relative">
+            <button
+              onClick={() => { setShareProjectId(null); setShareUrl(null); }}
+              className="absolute top-3 right-3 p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-9 h-9 rounded-xl bg-violet-600/20 border border-violet-500/20 flex items-center justify-center">
+                <Share2 className="w-4 h-4 text-violet-400" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-zinc-100">Share Project</h3>
+                <p className="text-[10px] text-zinc-500">Generate a shareable link for this project</p>
+              </div>
+            </div>
+
+            {isGeneratingShare ? (
+              <div className="py-8 flex flex-col items-center gap-3">
+                <div className="w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                <p className="text-xs text-zinc-400">Generating link...</p>
+              </div>
+            ) : shareUrl ? (
+              <div className="space-y-3">
+                <p className="text-[10px] text-zinc-400 leading-relaxed">
+                  Your project has been encoded as a portable link. Recipients can import it back into Jellycut using <strong>Import Backup</strong>.
+                </p>
+                <div className="flex gap-2">
+                  <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[10px] font-mono text-zinc-400 overflow-hidden text-ellipsis whitespace-nowrap">
+                    {shareUrl.startsWith('data:') ? '(Encoded project data — click Copy to copy)' : shareUrl}
+                  </div>
+                  <button
+                    onClick={handleCopyShareLink}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      copiedShareLink
+                        ? 'bg-emerald-600/20 border border-emerald-500/30 text-emerald-400'
+                        : 'bg-violet-600 hover:bg-violet-500 text-white'
+                    }`}
+                  >
+                    {copiedShareLink ? <Check className="w-3.5 h-3.5" /> : <Link className="w-3.5 h-3.5" />}
+                    {copiedShareLink ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+                <p className="text-[9px] text-zinc-600 leading-relaxed">
+                  💡 Tip: If a cloud endpoint (VITE_CLOUD_ENDPOINT) is configured, a real public URL is returned instead.
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-500 py-4 text-center">No link generated yet.</p>
+            )}
           </div>
         </div>
       )}

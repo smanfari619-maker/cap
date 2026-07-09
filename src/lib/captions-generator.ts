@@ -1,3 +1,5 @@
+import { db } from './db';
+import { getFileFromOPFS } from './opfs';
 
 export interface CaptionSegment {
   text: string;
@@ -31,7 +33,6 @@ export function startSpeechRecognitionCaptions(
       const text = result[0].transcript.trim();
       const elapsedMs = Date.now() - startTime;
       
-      // Guess duration based on speech length
       const durationMs = Math.max(1500, text.length * 80);
       const startMs = Math.max(0, elapsedMs - durationMs);
 
@@ -55,67 +56,119 @@ export function startSpeechRecognitionCaptions(
   return recognition;
 }
 
-export async function generateAutoCaptions(project: any): Promise<CaptionSegment[]> {
-  const segments: CaptionSegment[] = [];
-
+// Resamples and mixes all project audio into a single 16000Hz mono Float32Array PCM buffer
+async function mixProjectAudioTo16kMono(project: any): Promise<Float32Array | null> {
+  let maxTimeMs = 0;
   const soundClips: any[] = [];
-  project.tracks.forEach((track: any) => {
+
+  for (const track of project.tracks) {
     if (track.type === 'video' || track.type === 'audio') {
-      track.clips.forEach((clip: any) => {
-        if (clip.assetId) {
+      for (const clip of track.clips) {
+        if (clip.assetId && clip.type !== 'image') {
           soundClips.push(clip);
-        }
-      });
-    }
-  });
-
-  soundClips.sort((a, b) => a.positionMs - b.positionMs);
-
-  const sentences = [
-    "Welcome to my amazing video project!",
-    "Today, we are going to explore advanced in-browser GPU video editing.",
-    "This offline editor processes everything locally using WebAssembly and WebGL.",
-    "Notice the smooth transitions and effects applied between scenes.",
-    "Let's look at the color correction and 3D LUT adjustment capabilities.",
-    "We can also use real-time audio equalization filters for optimal sound.",
-    "Thank you for watching this demonstration of Jellycut!"
-  ];
-
-  if (soundClips.length === 0) {
-    let currentMs = 1000;
-    for (let i = 0; i < sentences.length; i++) {
-      const dur = 2000 + sentences[i].length * 30;
-      segments.push({
-        text: sentences[i],
-        startMs: currentMs,
-        endMs: currentMs + dur
-      });
-      currentMs += dur + 800;
-    }
-  } else {
-    soundClips.forEach((clip, index) => {
-      const clipStart = clip.positionMs;
-      const clipDuration = clip.durationMs;
-      
-      const segmentLen = 4000;
-      const numSegments = Math.max(1, Math.floor(clipDuration / segmentLen));
-      
-      for (let s = 0; s < numSegments; s++) {
-        const sentenceIdx = (index * 2 + s) % sentences.length;
-        const text = sentences[sentenceIdx];
-        const start = clipStart + s * segmentLen;
-        const end = Math.min(clipStart + clipDuration, start + segmentLen - 500);
-        
-        if (end > start + 500) {
-          segments.push({
-            text,
-            startMs: start,
-            endMs: end
-          });
+          const endMs = clip.positionMs + clip.durationMs;
+          if (endMs > maxTimeMs) {
+            maxTimeMs = endMs;
+          }
         }
       }
-    });
+    }
   }
 
-  return segments;
+  if (maxTimeMs === 0) return null;
+
+  const sampleRate = 16000;
+  const totalLength = Math.max(sampleRate, Math.round((sampleRate * maxTimeMs) / 1000));
+  
+  const offlineCtx = new OfflineAudioContext({
+    numberOfChannels: 1,
+    length: totalLength,
+    sampleRate
+  });
+
+  const baseAudioCtx = new AudioContext({ sampleRate: 44100 });
+
+  try {
+    for (const clip of soundClips) {
+      if (!clip.assetId) continue;
+      const asset = await db.assets.get(clip.assetId);
+      if (!asset) continue;
+
+      try {
+        const file = await getFileFromOPFS(asset.opfsPath);
+        const arrayBuffer = await file.arrayBuffer();
+        const decodedBuffer = await baseAudioCtx.decodeAudioData(arrayBuffer);
+
+        const source = offlineCtx.createBufferSource();
+        source.buffer = decodedBuffer;
+        source.playbackRate.value = clip.speed || 1.0;
+
+        const gainNode = offlineCtx.createGain();
+        const vol = clip.volume !== undefined ? clip.volume / 100 : 1.0;
+        gainNode.gain.setValueAtTime(vol, 0);
+
+        source.connect(gainNode);
+        gainNode.connect(offlineCtx.destination);
+
+        const startTimeSec = clip.positionMs / 1000;
+        const trimStartSec = clip.trimStartMs / 1000;
+        const durationSec = clip.durationMs / 1000;
+
+        source.start(startTimeSec, trimStartSec, durationSec);
+      } catch (err) {
+        console.warn('Failed to mix clip for auto-captions:', clip.name, err);
+      }
+    }
+
+    const rendered = await offlineCtx.startRendering();
+    await baseAudioCtx.close();
+    return rendered.getChannelData(0);
+  } catch (err) {
+    console.error('Audio mixing failed:', err);
+    await baseAudioCtx.close();
+    return null;
+  }
+}
+
+export async function generateAutoCaptions(
+  project: any,
+  onProgress?: (stage: string, percent: number) => void
+): Promise<CaptionSegment[]> {
+  onProgress?.('Mixing audio tracks...', 10);
+  const audioData = await mixProjectAudioTo16kMono(project);
+  if (!audioData) {
+    throw new Error('No audio found in project to transcribe.');
+  }
+
+  return new Promise((resolve, reject) => {
+    onProgress?.('Initializing Whisper AI model...', 25);
+
+    const worker = new Worker(
+      new URL('../workers/whisper.worker.ts', import.meta.url),
+      { type: 'module' }
+    );
+
+    worker.onmessage = (event) => {
+      const { status, progress, segments, error } = event.data;
+      if (status === 'loading') {
+        onProgress?.('Downloading Whisper AI Model (~75MB)...', Math.round(25 + progress * 0.45));
+      } else if (status === 'transcribing') {
+        onProgress?.('Transcribing audio files locally...', 75);
+      } else if (status === 'done') {
+        onProgress?.('Formatting captions...', 95);
+        worker.terminate();
+        resolve(segments);
+      } else if (status === 'error') {
+        worker.terminate();
+        reject(new Error(error));
+      }
+    };
+
+    worker.onerror = (err) => {
+      worker.terminate();
+      reject(err);
+    };
+
+    worker.postMessage({ audioData });
+  });
 }
