@@ -54,7 +54,6 @@ export default function Timeline({ height }: { height: number }) {
   const updateTracks = useEditorStore(state => state.updateTracks);
   const updateClip = useEditorStore(state => state.updateClip);
   const removeClip = useEditorStore(state => state.removeClip);
-  const splitClipAtPlayhead = useEditorStore(state => state.splitClipAtPlayhead);
   const addClip = useEditorStore(state => state.addClip);
   const removeTrack = useEditorStore(state => state.removeTrack);
   const reorderTrack = useEditorStore(state => state.reorderTrack);
