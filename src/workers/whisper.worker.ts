@@ -1,3 +1,4 @@
+// @ts-ignore - Vercel TS module resolution workaround
 import { pipeline, env } from '@xenova/transformers';
 
 // Configure ONNX Runtime to use CDN assets
