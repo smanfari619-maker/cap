@@ -307,7 +307,7 @@ export default function Dashboard() {
 
 
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden bg-zinc-950 text-zinc-100 relative">
+    <div className="flex-1 overflow-y-auto overflow-x-hidden bg-zinc-950 text-zinc-100 relative dashboard-light">
       {/* Decorative gradients */}
       <div className="absolute top-0 left-1/4 w-[600px] h-[600px] purple-glow-accent rounded-full blur-[140px] pointer-events-none" />
       <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] blue-glow-accent rounded-full blur-[120px] pointer-events-none" />

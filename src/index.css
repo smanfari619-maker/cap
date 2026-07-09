@@ -310,3 +310,240 @@ input[type="range"]::-moz-range-thumb:hover {
 .safe-bottom-padding {
   padding-bottom: calc(env(safe-area-inset-bottom) + 0.75rem) !important;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Jellycut Light Theme Dashboard overrides
+   ───────────────────────────────────────────────────────────────────────── */
+.dashboard-light {
+  background-color: #f6f8fa !important;
+  color: #3f3f46 !important;
+}
+
+/* Background glows */
+.dashboard-light .purple-glow-accent {
+  background: radial-gradient(circle, rgba(139, 92, 246, 0.05) 0%, transparent 70%) !important;
+}
+.dashboard-light .blue-glow-accent {
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.05) 0%, transparent 70%) !important;
+}
+
+/* Text elements */
+.dashboard-light h1,
+.dashboard-light h2,
+.dashboard-light h3,
+.dashboard-light h4,
+.dashboard-light .text-zinc-100,
+.dashboard-light .text-zinc-200,
+.dashboard-light .text-zinc-300,
+.dashboard-light .text-zinc-350 {
+  color: #1e293b !important;
+}
+
+.dashboard-light .text-zinc-400 {
+  color: #64748b !important;
+}
+
+.dashboard-light .text-zinc-500,
+.dashboard-light .text-zinc-650 {
+  color: #94a3b8 !important;
+}
+
+/* Border elements */
+.dashboard-light .border-zinc-800,
+.dashboard-light .border-zinc-850,
+.dashboard-light .border-zinc-900,
+.dashboard-light .border-zinc-950,
+.dashboard-light .border-zinc-900\/60,
+.dashboard-light .border-violet-900\/30,
+.dashboard-light .border-violet-800\/40,
+.dashboard-light .border-violet-900\/40 {
+  border-color: #e2e8f0 !important;
+}
+
+/* Panel and Card containers */
+.dashboard-light .glass-panel,
+.dashboard-light .group.flex.flex-col,
+.dashboard-light .bg-zinc-900\/20,
+.dashboard-light .bg-zinc-900\/25,
+.dashboard-light .bg-zinc-900\/35,
+.dashboard-light .bg-zinc-900\/40,
+.dashboard-light .bg-zinc-900\/50,
+.dashboard-light .bg-zinc-950\/40,
+.dashboard-light .bg-zinc-900\/10 {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.04), 0 2px 4px -1px rgba(0, 0, 0, 0.02) !important;
+}
+
+/* Hover effects */
+.dashboard-light .group.flex.flex-col:hover,
+.dashboard-light .glass-panel:hover,
+.dashboard-light .bg-zinc-900\/20:hover,
+.dashboard-light .bg-zinc-900\/25:hover,
+.dashboard-light .bg-zinc-900\/40:hover {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.04), 0 4px 6px -2px rgba(0, 0, 0, 0.02) !important;
+}
+
+/* Folder Groups (Story Cutter) */
+.dashboard-light .border-violet-900\/30.bg-violet-950\/10 {
+  background-color: #f5f3ff !important;
+  border-color: #ddd6fe !important;
+}
+.dashboard-light .border-violet-900\/30.bg-violet-950\/10 button:hover {
+  background-color: #ede9fe !important;
+}
+.dashboard-light .text-violet-300 {
+  color: #6d28d9 !important;
+}
+.dashboard-light .text-violet-400 {
+  color: #7c3aed !important;
+}
+.dashboard-light .bg-violet-900\/40.border-violet-800\/40 {
+  background-color: #ede9fe !important;
+  border-color: #ddd6fe !important;
+  color: #6d28d9 !important;
+}
+
+/* Project Cards Previews */
+.dashboard-light .bg-zinc-950\/40 {
+  background-color: #f8fafc !important;
+  border-bottom-color: #f1f5f9 !important;
+}
+.dashboard-light .from-zinc-800\/60 {
+  background-image: linear-gradient(to bottom right, #f1f5f9, #f8fafc) !important;
+  border-color: #e2e8f0 !important;
+}
+.dashboard-light .bg-zinc-900\/80 {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+.dashboard-light .bg-zinc-900\/90 {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+.dashboard-light .bg-zinc-900 {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+}
+.dashboard-light .bg-zinc-905 {
+  background-color: #f1f5f9 !important;
+}
+.dashboard-light .text-sky-400 {
+  color: #0284c7 !important;
+}
+.dashboard-light .text-zinc-650 {
+  color: #64748b !important;
+}
+
+/* Input, Search, and Select Fields */
+.dashboard-light input[type="text"],
+.dashboard-light select {
+  background-color: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #1e293b !important;
+}
+.dashboard-light input[type="text"]:focus,
+.dashboard-light select:focus {
+  border-color: #8b5cf6 !important;
+  outline: none;
+}
+
+/* Template gallery cards styling override */
+.dashboard-light .from-red-600\/20,
+.dashboard-light .from-pink-600\/20,
+.dashboard-light .from-emerald-600\/20,
+.dashboard-light .from-violet-600\/20,
+.dashboard-light .from-amber-600\/20,
+.dashboard-light .from-sky-600\/20 {
+  background-color: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+}
+.dashboard-light .from-red-600\/20:hover { border-color: rgba(239, 68, 68, 0.4) !important; }
+.dashboard-light .from-pink-600\/20:hover { border-color: rgba(236, 72, 153, 0.4) !important; }
+.dashboard-light .from-emerald-600\/20:hover { border-color: rgba(16, 185, 129, 0.4) !important; }
+.dashboard-light .from-violet-600\/20:hover { border-color: rgba(139, 92, 246, 0.4) !important; }
+.dashboard-light .from-amber-600\/20:hover { border-color: rgba(245, 158, 11, 0.4) !important; }
+.dashboard-light .from-sky-600\/20:hover { border-color: rgba(14, 165, 233, 0.4) !important; }
+
+/* Subtext in template cards */
+.dashboard-light .bg-zinc-900\/60 {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* Category templates labels */
+.dashboard-light .bg-pink-500\/15 { background-color: #fce7f3 !important; color: #db2777 !important; border-color: #fbcfe8 !important; }
+.dashboard-light .bg-emerald-500\/15 { background-color: #d1fae5 !important; color: #059669 !important; border-color: #a7f3d0 !important; }
+.dashboard-light .bg-amber-500\/15 { background-color: #fef3c7 !important; color: #d97706 !important; border-color: #fde68a !important; }
+.dashboard-light .bg-sky-500\/15 { background-color: #e0f2fe !important; color: #0284c7 !important; border-color: #bae6fd !important; }
+.dashboard-light .bg-violet-500\/15 { background-color: #ede9fe !important; color: #7c3aed !important; border-color: #ddd6fe !important; }
+
+/* Button labels and text tags */
+.dashboard-light .bg-zinc-900\/70,
+.dashboard-light .bg-zinc-900\/35 {
+  background-color: #f1f5f9 !important;
+  border-color: #e2e8f0 !important;
+  color: #475569 !important;
+}
+
+/* Standalone Tools custom light mode overrides (WatermarkRemoverTool, LipSyncTool, StoryCutterTool) */
+.dashboard-light .from-violet-500\/10,
+.dashboard-light .from-violet-500\/20 {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  border-color: #e2e8f0 !important;
+}
+.dashboard-light .from-violet-500\/10:hover,
+.dashboard-light .from-violet-500\/20:hover {
+  border-color: #c084fc !important;
+  box-shadow: 0 10px 15px -3px rgba(168, 85, 247, 0.06), 0 4px 6px -2px rgba(168, 85, 247, 0.02) !important;
+}
+
+.dashboard-light .bg-gradient-to-br.from-violet-500\/20 {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* Modals inside dashboard */
+.dashboard-light .fixed.inset-0.bg-black\/80 {
+  background-color: rgba(15, 23, 42, 0.6) !important; /* Soft backdrop blur */
+}
+.dashboard-light .fixed.inset-0 .bg-[#111113],
+.dashboard-light .fixed.inset-0 .bg-[#18181c] {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #1e293b !important;
+}
+.dashboard-light .fixed.inset-0 .border-b,
+.dashboard-light .fixed.inset-0 .border-t {
+  border-color: #e2e8f0 !important;
+}
+.dashboard-light .fixed.inset-0 .text-zinc-100,
+.dashboard-light .fixed.inset-0 .text-zinc-200,
+.dashboard-light .fixed.inset-0 .text-zinc-300 {
+  color: #1e293b !important;
+}
+.dashboard-light .fixed.inset-0 .text-zinc-500 {
+  color: #64748b !important;
+}
+.dashboard-light .fixed.inset-0 .bg-zinc-900,
+.dashboard-light .fixed.inset-0 .bg-zinc-900\/40,
+.dashboard-light .fixed.inset-0 .bg-zinc-900\/50,
+.dashboard-light .fixed.inset-0 .bg-zinc-950 {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+  color: #1e293b !important;
+}
+.dashboard-light .fixed.inset-0 .text-zinc-400 {
+  color: #64748b !important;
+}
+.dashboard-light .fixed.inset-0 input,
+.dashboard-light .fixed.inset-0 select {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #1e293b !important;
+}
