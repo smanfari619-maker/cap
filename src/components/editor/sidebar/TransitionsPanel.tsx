@@ -20,6 +20,9 @@ const getTransitionAnimationA = (id: string, isHovered: boolean) => {
   if (id === 'cross-zoom') {
     return { animation: 'trans-cross-zoom-a 1.5s infinite ease-in-out' };
   }
+  if (id === 'zoom-rotate') {
+    return { animation: 'trans-zoom-rotate-a 1.5s infinite ease-in-out' };
+  }
   return {};
 };
 
@@ -31,6 +34,7 @@ const getTransitionAnimationB = (id: string, isHovered: boolean) => {
     case 'dip-black':
     case 'dip-white':
     case 'flash':
+    case 'light-leak':
       return { animation: 'trans-clip-reveal 1.5s infinite' };
     case 'wipe-left':
       return { animation: 'trans-wipe-left 1.5s infinite ease-in-out' };
@@ -48,12 +52,16 @@ const getTransitionAnimationB = (id: string, isHovered: boolean) => {
       return { animation: 'trans-slide-up 1.5s infinite ease-in-out' };
     case 'slide-down':
       return { animation: 'trans-slide-down 1.5s infinite ease-in-out' };
+    case 'slide-fade-left':
+      return { animation: 'trans-slide-fade-left 1.5s infinite ease-in-out' };
     case 'zoom':
       return { animation: 'trans-zoom 1.5s infinite ease-in-out' };
     case 'zoom-out':
       return { animation: 'trans-zoom-out 1.5s infinite ease-in-out' };
     case 'cross-zoom':
       return { animation: 'trans-cross-zoom-b 1.5s infinite ease-in-out' };
+    case 'zoom-rotate':
+      return { animation: 'trans-zoom-rotate-b 1.5s infinite ease-in-out' };
     case 'glitch':
       return { animation: 'trans-glitch-b 1.5s infinite steps(5)' };
     default:
@@ -237,6 +245,23 @@ export default function TransitionsPanel({ selectedClipId, project, handleApplyT
             30%, 50% { opacity: 1; }
             90%, 100% { opacity: 0; }
           }
+          @keyframes trans-slide-fade-left {
+            0%, 10% { transform: translateX(50%); opacity: 0; }
+            90%, 100% { transform: translateX(0); opacity: 1; }
+          }
+          @keyframes trans-zoom-rotate-a {
+            0%, 10% { transform: scale(1) rotate(0deg); opacity: 1; }
+            90%, 100% { transform: scale(1.5) rotate(45deg); opacity: 0; }
+          }
+          @keyframes trans-zoom-rotate-b {
+            0%, 10% { transform: scale(0.4) rotate(-45deg); opacity: 0; }
+            90%, 100% { transform: scale(1) rotate(0); opacity: 1; }
+          }
+          @keyframes trans-light-leak-overlay {
+            0%, 10% { opacity: 0; filter: blur(5px); }
+            45%, 55% { opacity: 1; filter: blur(0px); }
+            90%, 100% { opacity: 0; filter: blur(5px); }
+          }
         `}</style>
         <div className="grid grid-cols-[repeat(auto-fill,minmax(80px,1fr))] gap-2">
           {filtered.map(trans => {
@@ -285,6 +310,14 @@ export default function TransitionsPanel({ selectedClipId, project, handleApplyT
                   {isHovered && trans.id === 'flash' && (
                     <div className="absolute inset-0 bg-white pointer-events-none" style={{
                       animation: 'trans-flash-overlay 1.5s infinite ease-out'
+                    }} />
+                  )}
+
+                  {/* Light Leak Overlay */}
+                  {isHovered && trans.id === 'light-leak' && (
+                    <div className="absolute inset-0 pointer-events-none" style={{
+                      background: 'radial-gradient(circle at 70% 30%, rgba(251, 146, 60, 0.95) 0%, rgba(239, 68, 68, 0.6) 50%, rgba(0,0,0,0) 100%)',
+                      animation: 'trans-light-leak-overlay 1.5s infinite ease-in-out'
                     }} />
                   )}
 

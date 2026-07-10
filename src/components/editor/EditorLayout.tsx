@@ -493,7 +493,9 @@ export default function EditorLayout() {
               />
             ) : (
               <>
-                <h2 className="text-xs font-semibold text-gray-200">{project.title}</h2>
+                <h2 className="text-xs font-semibold text-gray-200 truncate max-w-[280px] sm:max-w-[350px] md:max-w-[500px]" title={project.title}>
+                  {project.title}
+                </h2>
                 <button
                   onClick={() => setIsEditingTitle(true)}
                   className="p-0.5 hover:bg-[#2a2a30] text-gray-500 hover:text-gray-350 rounded transition"

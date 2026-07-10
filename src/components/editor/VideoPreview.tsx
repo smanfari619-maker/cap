@@ -36,8 +36,11 @@ export default function VideoPreview() {
   const effectCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const lutCacheRef = useRef<Map<string, Lut3D>>(new Map());
   const smoothedRefX = useRef<Record<string, number>>({});
+  const videoFrameCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const [assetsLoaded, setAssetsLoaded] = useState(false);
   const [totalDuration, setTotalDuration] = useState(0);
+  const [snapX, setSnapX] = useState(false);
+  const [snapY, setSnapY] = useState(false);
 
   // Web Audio Context and Routing references for real-time audio EQ preview
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -324,13 +327,28 @@ export default function VideoPreview() {
       if (isPlay) getAudioContext();
 
       proj.tracks.forEach(track => {
-        track.clips.forEach(clip => {
+        track.clips.forEach((clip, clipIdx) => {
           if (clip.disabled) return;
           if (!clip.assetId || clip.type === 'image') return;
           const media = mediaElementsRef.current.get(`${clip.id}_${clip.assetId}`);
           if (!media) return;
 
-          const isClipActive = time >= clip.positionMs && time < clip.positionMs + clip.durationMs;
+          // Find transition duration at start
+          const transIn = clip.transitionIn && clip.transitionIn.type !== 'none'
+            ? clip.transitionIn.durationMs
+            : 0;
+
+          // Find transition duration at end (defined by next clip's transitionIn)
+          let transOut = 0;
+          const nextClip = track.clips[clipIdx + 1];
+          if (nextClip && nextClip.transitionIn && nextClip.transitionIn.type !== 'none') {
+            transOut = nextClip.transitionIn.durationMs;
+          }
+
+          const startMs = clip.positionMs - transIn / 2;
+          const endMs = clip.positionMs + clip.durationMs + transOut / 2;
+
+          const isClipActive = time >= startMs && time < endMs;
           const key = `${clip.id}_${clip.assetId}`;
 
           if (isClipActive) {
@@ -346,26 +364,74 @@ export default function VideoPreview() {
             }
 
             const speed = clip.speed || 1.0;
-            const clipOffset = time - clip.positionMs;
-            const targetSourceTime = (clip.trimStartMs + (clipOffset * speed)) / 1000;
+            let targetSourceTime = (clip.trimStartMs + ((time - clip.positionMs) * speed)) / 1000;
+            let isFrozen = false;
+
+            // Check if clip is extended into a transition window
+            const transInDur = clip.transitionIn && clip.transitionIn.type !== 'none' ? clip.transitionIn.durationMs : 0;
+            let transOutDurForFrozen = 0;
+            const nextIdx = track.clips.indexOf(clip);
+            const nextForFrozen = nextIdx >= 0 ? track.clips[nextIdx + 1] : null;
+            if (nextForFrozen?.transitionIn && nextForFrozen.transitionIn.type !== 'none') {
+              transOutDurForFrozen = nextForFrozen.transitionIn.durationMs;
+            }
+            const inTransWindow =
+              (transInDur > 0 && time >= clip.positionMs - transInDur / 2 && time < clip.positionMs)
+              || (transOutDurForFrozen > 0 && time > clip.positionMs + clip.durationMs && time < clip.positionMs + clip.durationMs + transOutDurForFrozen / 2);
+
+            if (time < clip.positionMs && !inTransWindow) {
+              targetSourceTime = clip.trimStartMs / 1000;
+              isFrozen = true;
+            } else if (time > clip.positionMs + clip.durationMs && !inTransWindow) {
+              targetSourceTime = clip.trimEndMs / 1000;
+              isFrozen = true;
+            } else if (time < clip.positionMs) {
+              // In transition window before clip — play from trimStart
+              targetSourceTime = clip.trimStartMs / 1000;
+            } else if (time > clip.positionMs + clip.durationMs) {
+              // In transition window after clip — freeze at trimEnd but keep audio playing (cross-fade will mute it)
+              targetSourceTime = clip.trimEndMs / 1000;
+            }
 
             if (media.playbackRate !== speed) media.playbackRate = speed;
-            const isMuted = !!track.muted;
+            const isMuted = !!track.muted || isFrozen;
             if (media.muted !== isMuted) media.muted = isMuted;
 
             let volumeFactor = 1.0;
             const fadeIn = clip.fadeInMs || 0;
             const fadeOut = clip.fadeOutMs || 0;
+            const clipOffset = time - clip.positionMs;
             if (clipOffset < fadeIn && fadeIn > 0) {
               volumeFactor = clipOffset / fadeIn;
             } else if (clipOffset > clip.durationMs - fadeOut && fadeOut > 0) {
               volumeFactor = (clip.positionMs + clip.durationMs - time) / fadeOut;
             }
-            const baseVolume = clip.volume !== undefined ? clip.volume / 100 : 1.0;
-            const calculatedVolume = Math.max(0, Math.min(volumeFactor * baseVolume, 1.0));
-            if (media.volume !== calculatedVolume) media.volume = calculatedVolume;
 
-            if (isPlay) {
+            // Audio cross-fade during transitions: ramp volume to avoid click/pop
+            const transIn = clip.transitionIn && clip.transitionIn.type !== 'none'
+              ? clip.transitionIn.durationMs
+              : 0;
+            let transOutForAudio = 0;
+            const nextClipIdx = track.clips.indexOf(clip);
+            const nextClipForAudio = nextClipIdx >= 0 ? track.clips[nextClipIdx + 1] : null;
+            if (nextClipForAudio?.transitionIn && nextClipForAudio.transitionIn.type !== 'none') {
+              transOutForAudio = nextClipForAudio.transitionIn.durationMs;
+            }
+            const transInBoundary = clip.positionMs;
+            const transOutBoundary = clip.positionMs + clip.durationMs;
+            if (transIn > 0 && time >= transInBoundary - transIn / 2 && time < transInBoundary + transIn / 2) {
+              const p = (time - (transInBoundary - transIn / 2)) / transIn;
+              volumeFactor *= Math.max(0, Math.min(1, p));
+            } else if (transOutForAudio > 0 && time >= transOutBoundary - transOutForAudio / 2 && time < transOutBoundary + transOutForAudio / 2) {
+              const p = (time - (transOutBoundary - transOutForAudio / 2)) / transOutForAudio;
+              volumeFactor *= Math.max(0, Math.min(1, 1 - p));
+            }
+
+            const baseVolume = clip.volume !== undefined ? clip.volume / 100 : 1.0;
+            const calculatedVolume = isFrozen ? 0 : Math.max(0, Math.min(volumeFactor * baseVolume, 1.0));
+            if (Math.abs(media.volume - calculatedVolume) > 0.001) media.volume = calculatedVolume;
+
+            if (isPlay && !isFrozen) {
               (media as any)._pendingSeek = undefined;
               const isReallyPlaying = !media.paused || (media as any)._playPending;
               if (!isReallyPlaying) {
@@ -421,13 +487,29 @@ export default function VideoPreview() {
       ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Collect all active clips
+      // Collect all active clips (taking boundary transition overlaps into account)
       const activeClips: { clip: typeof project.tracks[0]['clips'][0]; trackType: string; trackIndex: number }[] = [];
       project.tracks.forEach((track, trackIndex) => {
         if (track.hidden) return; // skip hidden tracks
-        track.clips.forEach(clip => {
+        track.clips.forEach((clip, clipIdx) => {
           if (clip.disabled) return;
-          const isActive = currentTime >= clip.positionMs && currentTime < clip.positionMs + clip.durationMs;
+
+          // Find transition duration at start
+          const transIn = clip.transitionIn && clip.transitionIn.type !== 'none'
+            ? clip.transitionIn.durationMs
+            : 0;
+
+          // Find transition duration at end (defined by next clip's transitionIn)
+          let transOut = 0;
+          const nextClip = track.clips[clipIdx + 1];
+          if (nextClip && nextClip.transitionIn && nextClip.transitionIn.type !== 'none') {
+            transOut = nextClip.transitionIn.durationMs;
+          }
+
+          const startMs = clip.positionMs - transIn / 2;
+          const endMs = clip.positionMs + clip.durationMs + transOut / 2;
+
+          const isActive = currentTime >= startMs && currentTime < endMs;
           if (isActive) {
             activeClips.push({ clip, trackType: track.type, trackIndex });
           }
@@ -435,7 +517,13 @@ export default function VideoPreview() {
       });
 
       // Sort clips by trackIndex descending (so lower indices/top tracks are drawn last/on top)
-      activeClips.sort((a, b) => b.trackIndex - a.trackIndex);
+      // and within the same track by positionMs ascending (so outgoing clip is drawn before incoming clip)
+      activeClips.sort((a, b) => {
+        if (a.trackIndex !== b.trackIndex) {
+          return b.trackIndex - a.trackIndex;
+        }
+        return a.clip.positionMs - b.clip.positionMs;
+      });
 
       // Render active clips with volume and opacity transition fades
       activeClips.forEach(({ clip, trackType }) => {
@@ -444,21 +532,57 @@ export default function VideoPreview() {
         const fadeIn = clip.fadeInMs || 0;
         const fadeOut = clip.fadeOutMs || 0;
 
-        // Determine active transition — prefer new transitionIn, fall back to legacy transitionType
-        const activeTrans = clip.transitionIn
-          ? { type: clip.transitionIn.type, durationMs: clip.transitionIn.durationMs }
-          : clip.transitionType && clip.transitionType !== 'none'
-            ? { type: clip.transitionType, durationMs: fadeIn }
-            : null;
-        const hasTransition = !!activeTrans && clipOffset < (activeTrans.durationMs || fadeIn);
-        const transProgress = hasTransition ? clipOffset / (activeTrans!.durationMs || fadeIn) : 1;
+        // Transition In (Centered on clip.positionMs)
+        const transIn = clip.transitionIn && clip.transitionIn.type !== 'none'
+          ? clip.transitionIn
+          : null;
+        const transInDuration = transIn?.durationMs || 0;
+        const isTransInActive = transInDuration > 0 && 
+          currentTime >= clip.positionMs - transInDuration / 2 && 
+          currentTime < clip.positionMs + transInDuration / 2;
 
-        if (hasTransition) {
-          opacity = 1.0; // Handled inside transition block
-        } else if (clipOffset < fadeIn && fadeIn > 0) {
-          opacity = clipOffset / fadeIn;
-        } else if (clipOffset > clip.durationMs - fadeOut && fadeOut > 0) {
-          opacity = (clip.positionMs + clip.durationMs - currentTime) / fadeOut;
+        // Transition Out (Centered on nextClip.positionMs)
+        let transOut = null;
+        let transOutDuration = 0;
+        const track = project.tracks.find(t => t.clips.some(c => c.id === clip.id));
+        if (track) {
+          const sortedClips = [...track.clips].sort((a, b) => a.positionMs - b.positionMs);
+          const idx = sortedClips.findIndex(c => c.id === clip.id);
+          const nextClip = sortedClips[idx + 1];
+          if (nextClip && nextClip.transitionIn && nextClip.transitionIn.type !== 'none') {
+            transOut = nextClip.transitionIn;
+            transOutDuration = nextClip.transitionIn.durationMs;
+          }
+        }
+        const isTransOutActive = transOutDuration > 0 &&
+          currentTime >= (clip.positionMs + clip.durationMs) - transOutDuration / 2 &&
+          currentTime < (clip.positionMs + clip.durationMs) + transOutDuration / 2;
+
+        // Calculate opacity and transition progress
+        let hasTransition = false;
+        let activeTrans = null;
+        let transProgress = 1;
+        let isOutgoing = false;
+
+        const isIncomingTransActive = !!(isTransInActive && transIn);
+        const isOutgoingTransActive = !!(isTransOutActive && transOut);
+
+        if (isIncomingTransActive && transIn) {
+          hasTransition = true;
+          activeTrans = transIn;
+          transProgress = (currentTime - (clip.positionMs - transInDuration / 2)) / transInDuration;
+        } else if (isOutgoingTransActive && transOut) {
+          hasTransition = true;
+          activeTrans = transOut;
+          transProgress = (currentTime - ((clip.positionMs + clip.durationMs) - transOutDuration / 2)) / transOutDuration;
+          isOutgoing = true;
+        } else {
+          // Standard fade in/out if no transition is active
+          if (clipOffset >= 0 && clipOffset < fadeIn && fadeIn > 0) {
+            opacity = clipOffset / fadeIn;
+          } else if (clipOffset > clip.durationMs - fadeOut && fadeOut > 0) {
+            opacity = (clip.positionMs + clip.durationMs - currentTime) / fadeOut;
+          }
         }
 
         // Apply keyframed opacity multiplier
@@ -468,63 +592,19 @@ export default function VideoPreview() {
         ctx.save();
         ctx.globalAlpha = Math.max(0, Math.min(opacity, 1.0));
 
-        // Draw dip-to-black / dip-to-white / flash overlay for supported transitions
-        if (hasTransition && activeTrans) {
-          drawTransitionOverlay(ctx, activeTrans.type, transProgress, canvas.width, canvas.height);
-        }
+        if ((clip.type === 'video' || clip.type === 'image') && clip.assetId) {
+          const isAIAvatar = clip.type === 'video' && clip.assetId.startsWith('avatar_');
+          const media = clip.type === 'video' && !isAIAvatar ? (mediaElementsRef.current.get(`${clip.id}_${clip.assetId}`) as HTMLVideoElement | undefined) : null;
+          const img = clip.type === 'image' ? imageElementsRef.current.get(clip.assetId) : null;
 
-        if (clip.type === 'video' && clip.assetId) {
-          const isAIAvatar = clip.assetId.startsWith('avatar_');
-          const media = !isAIAvatar ? mediaElementsRef.current.get(`${clip.id}_${clip.assetId}`) : null;
-          if (isAIAvatar || (media && media instanceof HTMLVideoElement && media.readyState >= 2)) {
+          // During transitions allow falling back to cache even if media isn't ready
+          const clipCacheForReady = videoFrameCacheRef.current.get(clip.id);
+          const isMediaReadyOrCached = isAIAvatar
+            || (media && (media.readyState >= 2 || (clipCacheForReady && clipCacheForReady.width > 0)))
+            || (img && img.complete && img.naturalWidth > 0);
+
+          if (isMediaReadyOrCached) {
             
-            // Draw preceding clip's freeze frame if transition is active
-            const isTransActive = hasTransition && !!activeTrans;
-            if (isTransActive) {
-              let prevClip = null;
-              const track = project.tracks.find(t => t.clips.some(c => c.id === clip.id));
-              if (track) {
-                const sortedClips = [...track.clips].sort((a, b) => a.positionMs - b.positionMs);
-                const idx = sortedClips.findIndex(c => c.id === clip.id);
-                if (idx > 0) {
-                  prevClip = sortedClips[idx - 1];
-                }
-              }
-
-              if (prevClip) {
-                const prevMedia = prevClip.assetId ? mediaElementsRef.current.get(`${prevClip.id}_${prevClip.assetId}`) : null;
-                if (prevMedia && prevMedia instanceof HTMLVideoElement && prevMedia.readyState >= 2) {
-                  // Freeze frame at the end of the previous clip
-                  const prevTargetTime = prevClip.trimEndMs / 1000;
-                  if (Math.abs(prevMedia.currentTime - prevTargetTime) > 0.15) {
-                    prevMedia.currentTime = prevTargetTime;
-                  }
-                  // Calculate aspect ratio preserving destination rectangle for prevMedia
-                  const prevWidth = (prevMedia as HTMLVideoElement).videoWidth || canvas.width;
-                  const prevHeight = (prevMedia as HTMLVideoElement).videoHeight || canvas.height;
-                  const prevSrcRatio = prevWidth / prevHeight;
-                  const prevDestRatio = canvas.width / canvas.height;
-                  
-                  let pdWidth = canvas.width;
-                  let pdHeight = canvas.height;
-                  let pdx = 0;
-                  let pdy = 0;
-                  
-                  if (prevSrcRatio > prevDestRatio) {
-                    pdHeight = canvas.width / prevSrcRatio;
-                    pdy = (canvas.height - pdHeight) / 2;
-                  } else {
-                    pdWidth = canvas.height * prevSrcRatio;
-                    pdx = (canvas.width - pdWidth) / 2;
-                  }
-                  
-                  ctx.save();
-                  ctx.drawImage(prevMedia, pdx, pdy, pdWidth, pdHeight);
-                  ctx.restore();
-                }
-              }
-            }
-
             // Build filter string from colorAdjustments and filterSettings
             let filterString = '';
 
@@ -604,10 +684,10 @@ export default function VideoPreview() {
             ctx.save();
 
             // Apply wipe clip-region for wipe transitions (before translate)
-            const isWipe = hasTransition && activeTrans && ['wipe-left','wipe-right','wipe-up','wipe-down'].includes(activeTrans.type);
+            const isWipe = hasTransition && activeTrans && !isOutgoing && ['wipe-left','wipe-right','wipe-up','wipe-down'].includes(activeTrans.type);
             if (isWipe && activeTrans) {
               ctx.save();
-              applyWipeClip(ctx as CanvasRenderingContext2D, activeTrans.type, transProgress, canvas.width, canvas.height);
+              applyWipeClip(ctx as CanvasRenderingContext2D, activeTrans.type, transProgress, canvas.width, canvas.height, (activeTrans as any).easing);
             }
 
             ctx.translate(cx + tx, cy + ty);
@@ -620,7 +700,9 @@ export default function VideoPreview() {
                 transProgress,
                 canvas.width,
                 canvas.height,
-                currentTime
+                currentTime,
+                isOutgoing,
+                (activeTrans as any).easing
               );
             } else if (!hasTransition) {
               // No-op: drawn normally
@@ -633,10 +715,13 @@ export default function VideoPreview() {
               offscreenCanvasRef.current = document.createElement('canvas');
             }
             const offscreen = offscreenCanvasRef.current;
-            offscreen.width = canvas.width;
-            offscreen.height = canvas.height;
+            if (offscreen.width !== canvas.width || offscreen.height !== canvas.height) {
+              offscreen.width = canvas.width;
+              offscreen.height = canvas.height;
+            }
             const offCtx = offscreen.getContext('2d');
             if (offCtx) {
+              offCtx.clearRect(0, 0, offscreen.width, offscreen.height);
               offCtx.filter = filterString.trim() || 'none';
               
               if (isAIAvatar) {
@@ -645,11 +730,11 @@ export default function VideoPreview() {
                 offCtx.translate(offscreen.width / 2, offscreen.height / 2);
                 drawAIAvatar(offCtx as CanvasRenderingContext2D, preset, clipOffset, offscreen.width, offscreen.height, isPlaying);
                 offCtx.restore();
-              } else if (media && media instanceof HTMLVideoElement) {
+              } else if (media || img) {
                 // Calculate aspect ratio preserving destination rectangle (contain fit)
-                const videoWidth = media.videoWidth || offscreen.width;
-                const videoHeight = (media as HTMLVideoElement).videoHeight || offscreen.height;
-                const srcRatio = videoWidth / videoHeight;
+                const sourceWidth = media ? media.videoWidth : (img ? img.naturalWidth : offscreen.width);
+                const sourceHeight = media ? media.videoHeight : (img ? img.naturalHeight : offscreen.height);
+                const srcRatio = (sourceWidth || offscreen.width) / (sourceHeight || offscreen.height);
                 const destRatio = offscreen.width / offscreen.height;
                 
                 let dWidth = offscreen.width;
@@ -657,14 +742,49 @@ export default function VideoPreview() {
                 let dx = 0;
                 let dy = 0;
 
+                const cacheMap = videoFrameCacheRef.current;
+                if (media && !cacheMap.has(clip.id)) {
+                  cacheMap.set(clip.id, document.createElement('canvas'));
+                }
+                let clipCache = media ? cacheMap.get(clip.id) : null;
+
+                if ((!clipCache || clipCache.width === 0) && media) {
+                  for (const [cachedClipId, cachedCanvas] of cacheMap.entries()) {
+                    const otherClip = project.tracks.flatMap(t => t.clips).find(c => c.id === cachedClipId);
+                    if (otherClip && otherClip.assetId === clip.assetId && cachedCanvas.width > 0) {
+                      clipCache = cachedCanvas;
+                      break;
+                    }
+                  }
+                }
+
+                if (media && !media.seeking && media.readyState >= 2 && media.videoWidth > 0) {
+                  const cCanvas = cacheMap.get(clip.id);
+                  if (cCanvas) {
+                    if (cCanvas.width !== media.videoWidth || cCanvas.height !== media.videoHeight) {
+                      cCanvas.width = media.videoWidth;
+                      cCanvas.height = media.videoHeight;
+                    }
+                    const cCtx = cCanvas.getContext('2d');
+                    if (cCtx) {
+                      cCtx.drawImage(media, 0, 0);
+                    }
+                  }
+                }
+
+                let drawSource: CanvasImageSource = media || img!;
+                if (media && (media.seeking || media.readyState < 2) && clipCache && clipCache.width > 0) {
+                  drawSource = clipCache;
+                }
+
                 if (clip.smartReframe && clip.smartReframe.enabled) {
-                  const scale = Math.max(offscreen.width / videoWidth, offscreen.height / videoHeight);
-                  dWidth = videoWidth * scale;
-                  dHeight = videoHeight * scale;
+                  const scale = Math.max(offscreen.width / (sourceWidth || 1920), offscreen.height / (sourceHeight || 1080));
+                  dWidth = (sourceWidth || 1920) * scale;
+                  dHeight = (sourceHeight || 1080) * scale;
 
                   const frameNum = Math.floor(currentTime / 33);
                   if (frameNum % 10 === 0) {
-                    offCtx.drawImage(media, 0, 0, offscreen.width, offscreen.height);
+                    offCtx.drawImage(drawSource, 0, 0, offscreen.width, offscreen.height);
                     const rawX = getSubjectFaceCenter(offCtx, offscreen.width, offscreen.height);
                     const smoothing = (clip.smartReframe.smoothing ?? 20) / 100;
                     const prevX = smoothedRefX.current[clip.id] !== undefined ? smoothedRefX.current[clip.id] : 0.5;
@@ -687,7 +807,23 @@ export default function VideoPreview() {
                   }
                 }
 
-                offCtx.drawImage(media, dx, dy, dWidth, dHeight);
+                offCtx.drawImage(drawSource, dx, dy, dWidth, dHeight);
+
+                // Draw dip-to-black / dip-to-white / flash overlay restricted to the clip box
+                if (hasTransition && activeTrans) {
+                  drawTransitionOverlay(
+                    offCtx as CanvasRenderingContext2D,
+                    activeTrans.type,
+                    transProgress,
+                    offscreen.width,
+                    offscreen.height,
+                    dx,
+                    dy,
+                    dWidth,
+                    dHeight,
+                    (activeTrans as any).easing
+                  );
+                }
               }
               offCtx.filter = 'none';
 
@@ -1012,47 +1148,6 @@ export default function VideoPreview() {
           });
 
           ctx.restore();
-        } else if (clip.type === 'image' && clip.assetId) {
-          const img = imageElementsRef.current.get(clip.assetId);
-          if (img && img.complete && img.naturalWidth > 0) {
-            // Reuse the same transform/opacity/blend logic as video clips
-            const tScale = (clip.transform?.scale ?? 100) / 100;
-            const tX = clip.transform?.x ?? 0;
-            const tY = clip.transform?.y ?? 0;
-            const tRotation = clip.transform?.rotation ?? 0;
-            const blendModeMap: Record<string, string> = {
-              normal: 'source-over', multiply: 'multiply', screen: 'screen',
-              overlay: 'overlay', darken: 'darken', lighten: 'lighten',
-            };
-            const blend = clip.transform?.blendMode || 'normal';
-            ctx.globalCompositeOperation = (blendModeMap[blend] || 'source-over') as GlobalCompositeOperation;
-
-            const cx = canvas.width / 2 + tX;
-            const cy = canvas.height / 2 + tY;
-
-            ctx.save();
-            ctx.translate(cx, cy);
-            if (tRotation !== 0) ctx.rotate((tRotation * Math.PI) / 180);
-            if (tScale !== 1) ctx.scale(tScale, tScale);
-
-            // Contain-fit the image
-            const srcRatio = img.naturalWidth / (img.naturalHeight || 1);
-            const destRatio = canvas.width / canvas.height;
-            let dWidth = canvas.width;
-            let dHeight = canvas.height;
-            let dx = 0;
-            let dy = 0;
-            if (srcRatio > destRatio) {
-              dHeight = canvas.width / srcRatio;
-              dy = (canvas.height - dHeight) / 2;
-            } else {
-              dWidth = canvas.height * srcRatio;
-              dx = (canvas.width - dWidth) / 2;
-            }
-            ctx.drawImage(img, dx - canvas.width / 2, dy - canvas.height / 2, dWidth, dHeight);
-            ctx.restore();
-            ctx.globalCompositeOperation = 'source-over';
-          }
         }
 
         ctx.restore();
@@ -1272,18 +1367,52 @@ export default function VideoPreview() {
       const deltaY = (moveEvent.clientY - startMouseY) * scaleY;
 
       if (selectedClip.type === 'text' && selectedClip.textSettings) {
-        const newX = Math.max(0, Math.min(1, startTextX + deltaX / canvas.width));
-        const newY = Math.max(0, Math.min(1, startTextY + deltaY / canvas.height));
+        let newX = startTextX + deltaX / canvas.width;
+        let newY = startTextY + deltaY / canvas.height;
+
+        const snapThresholdPct = 0.015;
+
+        if (Math.abs(newX - 0.5) < snapThresholdPct) {
+          newX = 0.5;
+          setSnapX(true);
+        } else {
+          setSnapX(false);
+        }
+
+        if (Math.abs(newY - 0.5) < snapThresholdPct) {
+          newY = 0.5;
+          setSnapY(true);
+        } else {
+          setSnapY(false);
+        }
+
         updateClip(selectedClip.id, {
           textSettings: {
             ...selectedClip.textSettings,
-            x: newX,
-            y: newY
+            x: Math.max(0, Math.min(1, newX)),
+            y: Math.max(0, Math.min(1, newY))
           }
         });
       } else {
-        const newX = startX + deltaX;
-        const newY = startY + deltaY;
+        let newX = startX + deltaX;
+        let newY = startY + deltaY;
+
+        const snapThreshold = 12;
+
+        if (Math.abs(newX) < snapThreshold) {
+          newX = 0;
+          setSnapX(true);
+        } else {
+          setSnapX(false);
+        }
+
+        if (Math.abs(newY) < snapThreshold) {
+          newY = 0;
+          setSnapY(true);
+        } else {
+          setSnapY(false);
+        }
+
         updateClip(selectedClip.id, {
           transform: {
             ...(selectedClip.transform || {
@@ -1297,6 +1426,196 @@ export default function VideoPreview() {
           }
         });
       }
+    };
+
+    const handleMouseUp = () => {
+      setSnapX(false);
+      setSnapY(false);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  const selectedClip = project?.tracks
+    .flatMap(t => t.clips)
+    .find(c => c.id === selectedClipId);
+
+  const showOverlay = selectedClip && (selectedClip.type === 'video' || selectedClip.type === 'image');
+
+  // Calculate contain-fit coordinates mapping project coords to percentage bounds
+  let left_pct = 0;
+  let top_pct = 0;
+  let width_pct = 100;
+  let height_pct = 100;
+  let tRotation = 0;
+
+  if (selectedClip && showOverlay) {
+    let mediaWidth = project?.width || 1920;
+    let mediaHeight = project?.height || 1080;
+
+    if (selectedClip.type === 'video') {
+      const media = mediaElementsRef.current.get(`${selectedClip.id}_${selectedClip.assetId}`);
+      if (media && media instanceof HTMLVideoElement) {
+        mediaWidth = media.videoWidth || mediaWidth;
+        mediaHeight = media.videoHeight || mediaHeight;
+      }
+    } else if (selectedClip.type === 'image') {
+      const img = selectedClip.assetId ? imageElementsRef.current.get(selectedClip.assetId) : null;
+      if (img && img instanceof HTMLImageElement) {
+        mediaWidth = img.naturalWidth || mediaWidth;
+        mediaHeight = img.naturalHeight || mediaHeight;
+      }
+    }
+
+    const W = project?.width || 1920;
+    const H = project?.height || 1080;
+
+    const tx = selectedClip.transform?.x || 0;
+    const ty = selectedClip.transform?.y || 0;
+    tRotation = selectedClip.transform?.rotation || 0;
+    const tScale = (selectedClip.transform?.scale !== undefined ? selectedClip.transform.scale : 100) / 100;
+
+    const srcRatio = mediaWidth / mediaHeight;
+    const destRatio = W / H;
+
+    let baseW = W;
+    let baseH = H;
+
+    if (srcRatio > destRatio) {
+      baseW = W;
+      baseH = W / srcRatio;
+    } else {
+      baseW = H * srcRatio;
+      baseH = H;
+    }
+
+    const clipW = baseW * tScale;
+    const clipH = baseH * tScale;
+
+    const cx = W / 2 + tx;
+    const cy = H / 2 + ty;
+
+    const left = cx - clipW / 2;
+    const top = cy - clipH / 2;
+
+    left_pct = (left / W) * 100;
+    top_pct = (top / H) * 100;
+    width_pct = (clipW / W) * 100;
+    height_pct = (clipH / H) * 100;
+  }
+
+  const handleResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!selectedClip) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas || !project) return;
+    const rect = canvas.getBoundingClientRect();
+
+    const W = project.width;
+    const H = project.height;
+
+    const tx = selectedClip.transform?.x || 0;
+    const ty = selectedClip.transform?.y || 0;
+    const cx = W / 2 + tx;
+    const cy = H / 2 + ty;
+
+    const screenCx = rect.left + (cx / W) * rect.width;
+    const screenCy = rect.top + (cy / H) * rect.height;
+
+    const startMouseX = e.clientX;
+    const startMouseY = e.clientY;
+
+    const dx = startMouseX - screenCx;
+    const dy = startMouseY - screenCy;
+    const startDist = Math.sqrt(dx * dx + dy * dy);
+
+    const startScale = selectedClip.transform?.scale !== undefined ? selectedClip.transform.scale : 100;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const curDx = moveEvent.clientX - screenCx;
+      const curDy = moveEvent.clientY - screenCy;
+      const curDist = Math.sqrt(curDx * curDx + curDy * curDy);
+
+      if (startDist > 0) {
+        const newScale = Math.round(startScale * (curDist / startDist));
+        const clampedScale = Math.max(5, Math.min(500, newScale));
+        updateClip(selectedClip.id, {
+          transform: {
+            ...(selectedClip.transform || {
+              x: 0,
+              y: 0,
+              rotation: 0,
+              uniformScale: true,
+              blendMode: 'normal'
+            }),
+            scale: clampedScale
+          }
+        });
+      }
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  const handleRotateMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!selectedClip) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas || !project) return;
+    const rect = canvas.getBoundingClientRect();
+
+    const W = project.width;
+    const H = project.height;
+
+    const tx = selectedClip.transform?.x || 0;
+    const ty = selectedClip.transform?.y || 0;
+    const cx = W / 2 + tx;
+    const cy = H / 2 + ty;
+
+    const screenCx = rect.left + (cx / W) * rect.width;
+    const screenCy = rect.top + (cy / H) * rect.height;
+
+    const startMouseX = e.clientX;
+    const startMouseY = e.clientY;
+
+    const startAngle = Math.atan2(startMouseY - screenCy, startMouseX - screenCx);
+    const startRotation = selectedClip.transform?.rotation || 0;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const curAngle = Math.atan2(moveEvent.clientY - screenCy, moveEvent.clientX - screenCx);
+      const deltaAngle = curAngle - startAngle;
+      const deltaDegrees = (deltaAngle * 180) / Math.PI;
+
+      let newRotation = Math.round(startRotation + deltaDegrees);
+      newRotation = ((newRotation % 360) + 360) % 360;
+
+      updateClip(selectedClip.id, {
+        transform: {
+          ...(selectedClip.transform || {
+            x: 0,
+            y: 0,
+            scale: 100,
+            uniformScale: true,
+            blendMode: 'normal'
+          }),
+          rotation: newRotation
+        }
+      });
     };
 
     const handleMouseUp = () => {
@@ -1321,7 +1640,7 @@ export default function VideoPreview() {
       {/* Canvas Area */}
       <div className="flex-1 flex items-center justify-center min-h-0 relative p-4 bg-[#121214]">
         <div 
-          className="relative max-w-full max-h-full bg-black rounded overflow-hidden border border-[#2c2c32] shadow-2xl transition-all flex items-center justify-center"
+          className="relative max-w-full max-h-full bg-black rounded overflow-visible border border-[#2c2c32] shadow-2xl transition-all flex items-center justify-center"
           style={{ 
             aspectRatio: `${project?.width || 1920} / ${project?.height || 1080}` 
           }}
@@ -1333,6 +1652,92 @@ export default function VideoPreview() {
             onMouseDown={handleCanvasMouseDown}
             className={`w-full h-full object-contain ${selectedClipId ? 'cursor-move' : ''}`}
           />
+
+          {/* Interactive Bounding Box Overlay */}
+          {showOverlay && (
+            <div 
+              style={{
+                position: 'absolute',
+                left: `${left_pct}%`,
+                top: `${top_pct}%`,
+                width: `${width_pct}%`,
+                height: `${height_pct}%`,
+                transform: `rotate(${tRotation}deg)`,
+                transformOrigin: 'center center',
+                border: '1.5px solid #8b5cf6',
+                pointerEvents: 'none',
+                boxShadow: '0 0 0 1px rgba(0,0,0,0.5)',
+                zIndex: 40
+              }}
+            >
+              {/* Corner handles */}
+              <div
+                onMouseDown={handleResizeMouseDown}
+                className="absolute w-3.5 h-3.5 bg-white border-2 border-violet-600 rounded-full cursor-nwse-resize -translate-x-1/2 -translate-y-1/2"
+                style={{ left: 0, top: 0, pointerEvents: 'auto' }}
+              />
+              <div
+                onMouseDown={handleResizeMouseDown}
+                className="absolute w-3.5 h-3.5 bg-white border-2 border-violet-600 rounded-full cursor-nesw-resize translate-x-1/2 -translate-y-1/2"
+                style={{ right: 0, top: 0, pointerEvents: 'auto' }}
+              />
+              <div
+                onMouseDown={handleResizeMouseDown}
+                className="absolute w-3.5 h-3.5 bg-white border-2 border-violet-600 rounded-full cursor-nesw-resize -translate-x-1/2 translate-y-1/2"
+                style={{ left: 0, bottom: 0, pointerEvents: 'auto' }}
+              />
+              <div
+                onMouseDown={handleResizeMouseDown}
+                className="absolute w-3.5 h-3.5 bg-white border-2 border-violet-600 rounded-full cursor-nwse-resize translate-x-1/2 translate-y-1/2"
+                style={{ right: 0, bottom: 0, pointerEvents: 'auto' }}
+              />
+
+              {/* Rotation Handle Connector */}
+              <div 
+                className="absolute left-1/2 bottom-0 w-0.5 bg-violet-500" 
+                style={{ height: '20px', transform: 'translateX(-50%) translateY(100%)' }}
+              />
+
+              {/* Rotation Button */}
+              <div
+                onMouseDown={handleRotateMouseDown}
+                className="absolute left-1/2 bottom-0 w-7 h-7 bg-zinc-900 border border-zinc-700 hover:border-zinc-500 rounded-full shadow-lg cursor-grab flex items-center justify-center hover:scale-105 active:scale-95 transition-transform"
+                style={{ 
+                  transform: 'translateX(-50%) translateY(32px)', 
+                  pointerEvents: 'auto'
+                }}
+                title="Rotate clip"
+              >
+                <svg
+                  className="w-4 h-4 text-violet-400"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"
+                  />
+                </svg>
+              </div>
+            </div>
+          )}
+
+          {/* Magnetic Center Guidelines */}
+          {snapX && (
+            <div 
+              className="absolute top-0 bottom-0 w-[1px] border-l border-dashed border-violet-500 z-30 pointer-events-none" 
+              style={{ left: '50%' }}
+            />
+          )}
+          {snapY && (
+            <div 
+              className="absolute left-0 right-0 h-[1px] border-t border-dashed border-violet-500 z-30 pointer-events-none" 
+              style={{ top: '50%' }}
+            />
+          )}
 
           {/* Safe Zone Overlay */}
           {showSafeZone && (

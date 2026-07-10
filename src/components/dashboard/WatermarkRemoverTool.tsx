@@ -64,7 +64,7 @@ function DropZone({ accept, onFile, label, sublabel }: {
       onDrop={handleDrop}
       className={`relative flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed p-10 cursor-pointer transition-all duration-200 select-none ${
         dragging ? 'border-violet-500 bg-violet-600/8 shadow-inner shadow-violet-900/20'
-                 : 'border-zinc-800 bg-zinc-900/20 hover:border-zinc-700 hover:bg-zinc-900/35'
+                 : 'border-zinc-808 bg-zinc-900/20 hover:border-zinc-700 hover:bg-zinc-900/35'
       }`}
     >
       <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-transform duration-200 ${dragging ? 'scale-110 bg-violet-600/20' : 'bg-zinc-800/80'}`}>
@@ -88,8 +88,8 @@ function BeforeAfterPreview({ origUrl, resultUrl, isVideo }: {
     <div className="grid grid-cols-2 gap-3">
       {([['Original', origUrl, false], ['Processed', resultUrl, true]] as const).map(([label, url, isPro]) => (
         <div key={label} className="flex flex-col gap-1.5">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 flex items-center gap-1.5">
-            <span className={`w-1.5 h-1.5 rounded-full inline-block ${isPro ? 'bg-violet-500' : 'bg-zinc-600'}`} />
+          <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-505 flex items-center gap-1.5">
+            <span className={`w-1.5 h-1.5 rounded-full inline-block ${isPro ? 'bg-violet-500' : 'bg-zinc-650'}`} />
             {label}
           </span>
           <div className="rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 aspect-video flex items-center justify-center relative">
@@ -118,8 +118,13 @@ interface ProcessResult {
   size: number;
 }
 
+interface WatermarkRemoverToolProps {
+  renderTrigger?: (open: () => void) => React.ReactNode;
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
-export default function WatermarkRemoverTool() {
+export default function WatermarkRemoverTool({ renderTrigger }: WatermarkRemoverToolProps = {}) {
+  const [isOpen, setIsOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('image');
 
   // Bounding box selection state
@@ -229,31 +234,15 @@ export default function WatermarkRemoverTool() {
   const fmtBytes = (b = 0) =>
     b < 1024 * 1024 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`;
 
-  // ── Render ──────────────────────────────────────────────────────────────────
-  return (
-    <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/20 overflow-hidden">
-
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800/60 bg-zinc-900/30">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-violet-600/15 border border-violet-500/20 flex items-center justify-center">
-            <Sparkles className="w-4 h-4 text-violet-400" />
-          </div>
-          <div>
-            <h3 className="text-sm font-bold text-zinc-200 leading-none">Gemini Watermark Remover</h3>
-            <p className="text-[10px] text-zinc-500 mt-0.5">100% client-side · No upload · Reverse alpha blending</p>
-          </div>
-        </div>
-        <span className="text-[10px] px-2 py-0.5 rounded border border-emerald-800/50 bg-emerald-950/30 text-emerald-400 font-bold select-none">FREE</span>
-      </div>
-
+  const content = (
+    <div className="flex flex-col gap-4">
       {/* Tabs */}
       <div className="flex gap-0 px-3 pt-3 border-b border-zinc-800/60">
         {(['image', 'video'] as Tab[]).map(t => (
           <button key={t} onClick={() => setTab(t)}
             className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all cursor-pointer ${
               tab === t ? 'border-violet-500 text-violet-300 bg-violet-500/8'
-                        : 'border-transparent text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/40'
+                        : 'border-transparent text-zinc-550 hover:text-zinc-300 hover:bg-zinc-800/40'
             }`}
           >
             {t === 'image' ? <ImageIcon className="w-3.5 h-3.5" /> : <Video className="w-3.5 h-3.5" />}
@@ -404,6 +393,55 @@ export default function WatermarkRemoverTool() {
         />
       )}
     </div>
+  );
+
+  const card = (
+    <div className="rounded-2xl border border-zinc-805/85 bg-zinc-900/20 overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800 bg-zinc-900/30">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-violet-600/15 border border-violet-500/20 flex items-center justify-center">
+            <Sparkles className="w-4 h-4 text-violet-400" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-zinc-200 leading-none">Gemini Watermark Remover</h3>
+            <p className="text-[10px] text-zinc-550 mt-0.5">100% client-side · No upload · Reverse alpha blending</p>
+          </div>
+        </div>
+        <span className="text-[10px] px-2 py-0.5 rounded border border-emerald-800/50 bg-emerald-950/30 text-emerald-400 font-bold select-none">FREE</span>
+      </div>
+      {content}
+    </div>
+  );
+
+  return (
+    <>
+      {renderTrigger ? renderTrigger(() => setIsOpen(true)) : card}
+      {isOpen && createPortal(
+        <div className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in-up">
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl border border-zinc-800 bg-[#18181b] shadow-2xl relative flex flex-col p-6">
+            <div className="flex justify-between items-center pb-4 mb-4 border-b border-zinc-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-violet-650/15 border border-violet-500/20 flex items-center justify-center">
+                  <Sparkles className="w-4 h-4 text-violet-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-zinc-100 leading-none">Gemini Watermark Remover</h3>
+                  <p className="text-[10px] text-zinc-400 mt-0.5">Scan and erase video watermarks automatically</p>
+                </div>
+              </div>
+              <button onClick={() => setIsOpen(false)} className="p-1.5 rounded-lg hover:bg-zinc-805 text-zinc-405 hover:text-zinc-200 transition cursor-pointer">
+                <X className="w-4.5 h-4.5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {content}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
   );
 }
 
@@ -723,7 +761,7 @@ function DashboardDrawModal({ file, isVideo, onClose, onConfirm }: DashboardDraw
 
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
-      <div className="relative w-full max-w-4xl p-4 sm:p-6 bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+      <div className="relative w-full max-w-4xl p-4 sm:p-6 bg-zinc-955 border border-zinc-800 rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden text-zinc-100">
 
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-zinc-900 mb-4 shrink-0">
@@ -740,7 +778,7 @@ function DashboardDrawModal({ file, isVideo, onClose, onConfirm }: DashboardDraw
         <div 
           ref={viewportRef}
           style={{ backgroundColor: '#000000' }}
-          className="flex-1 flex items-center justify-center rounded-lg border border-zinc-900 p-2 min-h-[150px] relative overflow-hidden select-none"
+          className="flex-1 flex items-center justify-center rounded-lg border border-zinc-909 p-2 min-h-[150px] relative overflow-hidden select-none"
         >
           {/* Floating Toolbar Overlay */}
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-25 flex items-center gap-1.5 p-1.5 bg-zinc-950/85 border border-zinc-800 rounded-xl backdrop-blur-md shadow-lg select-none">
@@ -804,7 +842,7 @@ function DashboardDrawModal({ file, isVideo, onClose, onConfirm }: DashboardDraw
             </button>
 
             {/* Zoom Value */}
-            <span className="text-[10px] font-bold font-mono px-1.5 text-zinc-300 min-w-[36px] text-center">
+            <span className="text-[10px] font-bold font-mono px-1.5 text-zinc-305 min-w-[36px] text-center">
               {Math.round(zoom * 100)}%
             </span>
 
@@ -833,7 +871,7 @@ function DashboardDrawModal({ file, isVideo, onClose, onConfirm }: DashboardDraw
 
           {!isLoaded && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
-              <RefreshCw className="w-6 h-6 text-zinc-500 animate-spin" />
+              <RefreshCw className="w-6 h-6 text-zinc-505 animate-spin" />
               <p className="text-xs text-zinc-500">Loading original preview...</p>
             </div>
           )}

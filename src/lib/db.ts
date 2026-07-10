@@ -201,6 +201,7 @@ export interface Project {
   // Folder grouping — set by Story Cutter and other batch tools
   folderId?: string;
   folderName?: string;
+  thumbnailUrl?: string;
 }
 
 export interface ProjectVersion {

@@ -181,6 +181,24 @@ export const EFFECTS_REGISTRY: Record<string, EffectDef> = {
     defaultIntensity: 50,
     isCanvasOp: true,
   },
+  'color-duotone': {
+    id: 'color-duotone',
+    name: 'Cyber Duotone',
+    category: 'Color',
+    description: 'Stylized duotone mapping using cyan and magenta gradients.',
+    previewColors: ['#06b6d4', '#d946ef'],
+    defaultIntensity: 70,
+    isCanvasOp: true,
+  },
+  'distort-lens-flare': {
+    id: 'distort-lens-flare',
+    name: 'Anamorphic Flare',
+    category: 'Glow',
+    description: 'Cinematic horizontal blue lens flare across highlights.',
+    previewColors: ['#0284c7', '#38bdf8'],
+    defaultIntensity: 50,
+    isCanvasOp: true,
+  },
 };
 
 export const EFFECT_CATEGORIES = ['Blur', 'Glow', 'Distort', 'Camera', 'Color'] as const;
@@ -395,6 +413,101 @@ export function applyCanvasEffect(
       }
     }
     ctx.putImageData(imgData, 0, 0);
+    return;
+  }
+
+  if (effectId === 'distort-fisheye') {
+    const imgData = ctx.getImageData(0, 0, width, height);
+    const output = ctx.createImageData(width, height);
+    const cx = width / 2;
+    const cy = height / 2;
+    const strength = t * 0.7;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const nx = (x - cx) / cx;
+        const ny = (y - cy) / cy;
+        const r = Math.sqrt(nx * nx + ny * ny);
+
+        let dr = r;
+        if (strength > 0) {
+          dr = r + strength * r * r * r;
+        }
+
+        const scale = dr / (r || 1);
+        const sourceNx = nx * scale;
+        const sourceNy = ny * scale;
+
+        const sourceX = Math.round(sourceNx * cx + cx);
+        const sourceY = Math.round(sourceNy * cy + cy);
+
+        const destIdx = (y * width + x) * 4;
+
+        if (sourceX >= 0 && sourceX < width && sourceY >= 0 && sourceY < height) {
+          const srcIdx = (sourceY * width + sourceX) * 4;
+          output.data[destIdx] = imgData.data[srcIdx];
+          output.data[destIdx + 1] = imgData.data[srcIdx + 1];
+          output.data[destIdx + 2] = imgData.data[srcIdx + 2];
+          output.data[destIdx + 3] = imgData.data[srcIdx + 3];
+        } else {
+          output.data[destIdx + 3] = 0;
+        }
+      }
+    }
+    ctx.putImageData(output, 0, 0);
+    return;
+  }
+
+  if (effectId === 'color-duotone') {
+    const imgData = ctx.getImageData(0, 0, width, height);
+    const data = imgData.data;
+    
+    // Cyan: R=6, G=182, B=212
+    // Magenta: R=217, G=70, B=239
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i+1];
+      const b = data[i+2];
+      const l = 0.299 * r + 0.587 * g + 0.114 * b;
+      const ratio = l / 255;
+
+      const dr = Math.round(6 * (1 - ratio) + 217 * ratio);
+      const dg = Math.round(182 * (1 - ratio) + 70 * ratio);
+      const db = Math.round(212 * (1 - ratio) + 239 * ratio);
+
+      data[i] = Math.round(r * (1 - t) + dr * t);
+      data[i+1] = Math.round(g * (1 - t) + dg * t);
+      data[i+2] = Math.round(b * (1 - t) + db * t);
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return;
+  }
+
+  if (effectId === 'distort-lens-flare') {
+    const gradient = ctx.createLinearGradient(0, height / 2, width, height / 2);
+    gradient.addColorStop(0, 'rgba(56, 189, 248, 0)');
+    gradient.addColorStop(0.3, 'rgba(56, 189, 248, 0.05)');
+    gradient.addColorStop(0.5, `rgba(255, 255, 255, ${t * 0.85})`);
+    gradient.addColorStop(0.7, 'rgba(56, 189, 248, 0.05)');
+    gradient.addColorStop(1, 'rgba(56, 189, 248, 0)');
+    
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, height / 2 - height * 0.04 * t, width, height * 0.08 * t);
+    
+    const radial = ctx.createRadialGradient(
+      width / 2, height / 2, 0,
+      width / 2, height / 2, width * 0.1 * t
+    );
+    radial.addColorStop(0, `rgba(255, 255, 255, ${t * 0.9})`);
+    radial.addColorStop(0.5, `rgba(56, 189, 248, ${t * 0.4})`);
+    radial.addColorStop(1, 'rgba(56, 189, 248, 0)');
+    ctx.fillStyle = radial;
+    ctx.beginPath();
+    ctx.arc(width / 2, height / 2, width * 0.1 * t, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
     return;
   }
 }

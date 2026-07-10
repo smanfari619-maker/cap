@@ -2596,6 +2596,18 @@ export default function Timeline({ height }: { height: number }) {
                           {/* Hatched Overlay if transition is present */}
                           {conn.hasTransition && (
                              <>
+                               {/* Solid white border box outline when selected */}
+                               {selectedClipIds.includes(conn.currId) && (
+                                 <div 
+                                   className="absolute top-1/2 -translate-y-1/2 pointer-events-none border-2 border-white rounded z-35 animate-fade-in"
+                                   style={{ 
+                                     left: `-${conn.transWidth / 2 - width / 2}px`, 
+                                     width: `${conn.transWidth}px`, 
+                                     height: '36px',
+                                   }}
+                                 />
+                               )}
+
                                <div 
                                  className="absolute top-1/2 -translate-y-1/2 pointer-events-none"
                                  style={{ 
@@ -2611,7 +2623,11 @@ export default function Timeline({ height }: { height: number }) {
                                {/* Left Resize Handle */}
                                <div
                                  onPointerDown={(e) => handleTransitionResizeMouseDown(e, conn.currId, 'left', conn.transWidth / pxPerMs, conn.prevId)}
-                                 className="absolute top-1/2 -translate-y-1/2 w-1.5 h-9 hover:bg-sky-500/80 cursor-col-resize z-40 transition-colors touch-none"
+                                 className={`absolute top-1/2 -translate-y-1/2 z-40 transition-colors touch-none cursor-col-resize ${
+                                   selectedClipIds.includes(conn.currId)
+                                     ? 'w-1.5 h-9 bg-white border border-zinc-600 rounded-sm hover:bg-sky-400'
+                                     : 'w-1.5 h-9 hover:bg-sky-500/80'
+                                 }`}
                                  style={{ left: `-${conn.transWidth / 2 - width / 2}px`, transform: 'translate(-50%, -50%)' }}
                                  title="Drag to adjust transition duration"
                                />
@@ -2619,7 +2635,11 @@ export default function Timeline({ height }: { height: number }) {
                                {/* Right Resize Handle */}
                                <div
                                  onPointerDown={(e) => handleTransitionResizeMouseDown(e, conn.currId, 'right', conn.transWidth / pxPerMs, conn.prevId)}
-                                 className="absolute top-1/2 -translate-y-1/2 w-1.5 h-9 hover:bg-sky-500/80 cursor-col-resize z-40 transition-colors touch-none"
+                                 className={`absolute top-1/2 -translate-y-1/2 z-40 transition-colors touch-none cursor-col-resize ${
+                                   selectedClipIds.includes(conn.currId)
+                                     ? 'w-1.5 h-9 bg-white border border-zinc-600 rounded-sm hover:bg-sky-400'
+                                     : 'w-1.5 h-9 hover:bg-sky-500/80'
+                                 }`}
                                  style={{ left: `${conn.transWidth / 2 + width / 2}px`, transform: 'translate(-50%, -50%)' }}
                                  title="Drag to adjust transition duration"
                                />

@@ -19,6 +19,8 @@ import {
 import { db } from '../../lib/db';
 import { saveFileToOPFS } from '../../lib/opfs';
 import { useEditorStore } from '../../store/editorStore';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 // ─────────────────────────────────────────────
 // Platform presets
@@ -170,21 +172,77 @@ function calculateSegments(totalSec: number, segmentSec: number): Segment[] {
   return segs;
 }
 
-// Download the source file — browser cannot trim video containers without FFmpeg
-function downloadClipFile(videoFile: File, seg: Segment, platform: string): void {
-  const baseName = videoFile.name.replace(/\.[^/.]+$/, '');
-  const ext = videoFile.name.split('.').pop() || 'mp4';
-  const start = formatTime(seg.startSec).replace(/:/g, '-');
-  const end = formatTime(seg.endSec).replace(/:/g, '-');
-  const fileName = `${baseName}_${platform}_Part${seg.index + 1}_${start}_${end}.${ext}`;
-  const url = URL.createObjectURL(videoFile);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+let ffmpegInstance: FFmpeg | null = null;
+
+async function getFFmpeg(): Promise<FFmpeg> {
+  if (ffmpegInstance) return ffmpegInstance;
+  const ffmpeg = new FFmpeg();
+  const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
+  await ffmpeg.load({
+    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+  });
+  ffmpegInstance = ffmpeg;
+  return ffmpeg;
+}
+
+// Download trimmed video segment using FFmpeg WASM (stream copy - no re-encoding)
+async function downloadClipFile(
+  videoFile: File,
+  seg: Segment,
+  platform: string,
+  onStartTrim: () => void,
+  onEndTrim: () => void,
+  onError: (msg: string) => void
+): Promise<void> {
+  onStartTrim();
+  try {
+    const ffmpeg = await getFFmpeg();
+    const baseName = videoFile.name.replace(/\.[^/.]+$/, '');
+    const ext = videoFile.name.split('.').pop() || 'mp4';
+    const startStr = formatTime(seg.startSec).replace(/:/g, '-');
+    const endStr = formatTime(seg.endSec).replace(/:/g, '-');
+    const fileName = `${baseName}_${platform}_Part${seg.index + 1}_${startStr}_${endStr}.${ext}`;
+
+    const inputName = `input_${seg.index}.${ext}`;
+    const outputName = `output_${seg.index}.${ext}`;
+
+    // Write original file to virtual FS
+    await ffmpeg.writeFile(inputName, await fetchFile(videoFile));
+
+    // Run lossless trimming command:
+    // ffmpeg -ss START -i input.mp4 -t DURATION -c copy output.mp4
+    await ffmpeg.exec([
+      '-ss', String(seg.startSec),
+      '-i', inputName,
+      '-t', String(seg.durationSec),
+      '-c', 'copy',
+      outputName
+    ]);
+
+    // Read the output trimmed file
+    const data = await ffmpeg.readFile(outputName);
+    const blob = new Blob([data as any], { type: videoFile.type || 'video/mp4' });
+
+    // Trigger download
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+    // Clean up VFS to save browser memory
+    await ffmpeg.deleteFile(inputName);
+    await ffmpeg.deleteFile(outputName);
+  } catch (err: any) {
+    console.error('Trimming error:', err);
+    onError(err.message || 'Failed to trim video segment.');
+  } finally {
+    onEndTrim();
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -214,6 +272,7 @@ export default function StoryCutterTool({ renderTrigger }: StoryCutterToolProps 
   const [createdProjects, setCreatedProjects] = useState<CreatedProject[]>([]);
   const [batchFolderName, setBatchFolderName] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [trimmingSegmentId, setTrimmingSegmentId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -601,13 +660,30 @@ export default function StoryCutterTool({ renderTrigger }: StoryCutterToolProps 
                         <span className="ml-1.5 text-sky-600">{proj.seg.durationSec.toFixed(1)}s</span>
                       </p>
                     </div>
-                    <button
-                      onClick={() => videoFile && downloadClipFile(videoFile, proj.seg, selectedPreset.platform)}
-                      title="Download source file"
-                      className="p-1.5 rounded-lg hover:bg-emerald-950/40 text-zinc-500 hover:text-emerald-400 transition cursor-pointer shrink-0"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                    </button>
+                    {trimmingSegmentId === proj.id ? (
+                      <div className="p-1.5 shrink-0 flex items-center justify-center">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          if (videoFile) {
+                            downloadClipFile(
+                              videoFile,
+                              proj.seg,
+                              selectedPreset.platform,
+                              () => setTrimmingSegmentId(proj.id),
+                              () => setTrimmingSegmentId(null),
+                              (msg) => setErrorMsg(msg)
+                            );
+                          }
+                        }}
+                        title="Download trimmed clip"
+                        className="p-1.5 rounded-lg hover:bg-emerald-950/40 text-zinc-500 hover:text-emerald-400 transition cursor-pointer shrink-0"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     <button
                       onClick={() => { setIsOpen(false); loadProject(proj.id); }}
                       title="Open in editor"

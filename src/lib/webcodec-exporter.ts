@@ -240,16 +240,22 @@ export async function exportProjectWebCodecs(
   onProgress: (percent: number) => void,
   isCancelled: () => boolean = () => false
 ): Promise<Blob> {
-  const { width, height, fps, bitrate, upscaleMode, onUpscaleProgress } = settings;
-
-  const renderWidth = upscaleMode === 'ai' ? Math.round(width / 2) : width;
-  const renderHeight = upscaleMode === 'ai' ? Math.round(height / 2) : height;
+  const { width, height, fps, bitrate } = settings;
+  let { upscaleMode } = settings;
+  let renderWidth = upscaleMode === 'ai' ? Math.round(width / 2) : width;
+  let renderHeight = upscaleMode === 'ai' ? Math.round(height / 2) : height;
 
   if (upscaleMode === 'ai' && !isUpscalerReady()) {
-    await initUpscaler(onUpscaleProgress);
-    onUpscaleProgress?.('', 0);
+    try {
+      await initUpscaler(settings.onUpscaleProgress);
+      settings.onUpscaleProgress?.('', 0);
+    } catch (err) {
+      console.warn('[Exporter] AI Upscaler initialization failed, falling back to enhanced mode:', err);
+      upscaleMode = 'enhanced';
+      renderWidth = settings.width;
+      renderHeight = settings.height;
+    }
   }
-
   onProgress(5);
   const audioBuffer = await mixAudioTracks(project, 44100);
   onProgress(15);
@@ -641,7 +647,9 @@ export async function exportProjectWebCodecs(
               transProgress,
               renderWidth,
               renderHeight,
-              timeMs
+              timeMs,
+              false,
+              (activeTrans as any).easing
             );
           }
 
@@ -1134,7 +1142,14 @@ export async function exportProjectWebCodecs(
         frameSource = await upscaleFrame(canvas as HTMLCanvasElement, width, height);
       } catch (err) {
         console.warn('[Upscaler] Frame upscale failed, using original:', err);
-        frameSource = canvas;
+        if (!enhancedCanvas) {
+          enhancedCanvas = document.createElement('canvas');
+          enhancedCanvas.width = width;
+          enhancedCanvas.height = height;
+          enhancedCtx = enhancedCanvas.getContext('2d')!;
+        }
+        enhancedCtx!.drawImage(canvas, 0, 0, width, height);
+        frameSource = enhancedCanvas;
       }
     } else if (upscaleMode === 'enhanced' && enhancedCanvas && enhancedCtx) {
       enhancedCtx.filter = 'contrast(1.04) saturate(1.03)';

@@ -43,6 +43,10 @@ const getEffectPreviewStyle = (effectId: string) => {
       return { filter: 'hue-rotate(240deg) saturate(220%) contrast(140%) brightness(110%)' };
     case 'distort-pixelate':
       return { filter: 'contrast(120%) saturate(110%) brightness(95%)', imageRendering: 'pixelated' as any };
+    case 'color-duotone':
+      return { filter: 'contrast(120%) saturate(200%) hue-rotate(270deg)' };
+    case 'distort-lens-flare':
+      return { filter: 'brightness(130%) contrast(105%) drop-shadow(0 0 2px #0284c7)' };
     default:
       return {};
   }
