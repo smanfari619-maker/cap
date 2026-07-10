@@ -336,6 +336,266 @@ export default function ClipInspector({ width }: { width: number }) {
             handleTextSettingsChange={handleTextSettingsChange}
           />
         )}
+        {/* Shape clip special settings */}
+        {selectedClip.shapeSettings && (
+          <div className="flex flex-col gap-4 border border-zinc-800 bg-zinc-950/20 rounded-xl p-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-gray-200 capitalize">{selectedClip.shapeSettings.type} Shape</span>
+              <span className="text-[9px] font-mono text-zinc-500">VECTOR ELEMENT</span>
+            </div>
+
+             {/* Fill Color */}
+            <div className="flex flex-col gap-2">
+              <label className="text-[10px] text-gray-400 font-semibold">Fill Color</label>
+              <div className="flex items-center gap-3">
+                <input 
+                  type="color" 
+                  value={selectedClip.shapeSettings.color || '#8b5cf6'} 
+                  onChange={(e) => {
+                    updateClip(selectedClip.id, {
+                      shapeSettings: {
+                        ...selectedClip.shapeSettings,
+                        color: e.target.value
+                      } as any
+                    });
+                  }}
+                  className="w-8 h-8 rounded bg-transparent border-0 cursor-pointer"
+                />
+                {/* Palette presets */}
+                <div className="flex gap-1.5 flex-wrap">
+                  {/* No Color Button */}
+                  <button
+                    onClick={() => {
+                      updateClip(selectedClip.id, {
+                        shapeSettings: {
+                          ...selectedClip.shapeSettings,
+                          color: 'transparent'
+                        } as any
+                      });
+                    }}
+                    className={`w-5 h-5 rounded-full border cursor-pointer hover:scale-110 transition relative bg-zinc-800 flex items-center justify-center overflow-hidden ${selectedClip.shapeSettings?.color === 'transparent' || selectedClip.shapeSettings?.color === 'none' ? 'border-sky-500 shadow-md shadow-sky-500/20' : 'border-white/20'}`}
+                    title="No Fill (Transparent)"
+                  >
+                    <div className="absolute w-[1.5px] h-full bg-red-500 rotate-45" />
+                  </button>
+
+                  {['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ffffff', '#000000'].map(c => (
+                    <button
+                      key={c}
+                      onClick={() => {
+                        updateClip(selectedClip.id, {
+                          shapeSettings: {
+                            ...selectedClip.shapeSettings,
+                            color: c
+                          } as any
+                        });
+                      }}
+                      className={`w-5 h-5 rounded-full border cursor-pointer hover:scale-110 transition ${selectedClip.shapeSettings?.color === c ? 'border-sky-500 shadow-md shadow-sky-500/20' : 'border-white/10'}`}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Stroke Color */}
+            <div className="flex flex-col gap-2">
+              <label className="text-[10px] text-gray-400 font-semibold">Outline Color</label>
+              <div className="flex items-center gap-3">
+                <input 
+                  type="color" 
+                  value={selectedClip.shapeSettings.strokeColor || '#ffffff'} 
+                  onChange={(e) => {
+                    updateClip(selectedClip.id, {
+                      shapeSettings: {
+                        ...selectedClip.shapeSettings,
+                        strokeColor: e.target.value
+                      } as any
+                    });
+                  }}
+                  className="w-8 h-8 rounded bg-transparent border-0 cursor-pointer"
+                />
+                {/* Palette presets */}
+                <div className="flex gap-1.5 flex-wrap">
+                  {/* No Outline Button */}
+                  <button
+                    onClick={() => {
+                      updateClip(selectedClip.id, {
+                        shapeSettings: {
+                          ...selectedClip.shapeSettings,
+                          strokeColor: 'transparent'
+                        } as any
+                      });
+                    }}
+                    className={`w-5 h-5 rounded-full border cursor-pointer hover:scale-110 transition relative bg-zinc-800 flex items-center justify-center overflow-hidden ${selectedClip.shapeSettings?.strokeColor === 'transparent' || selectedClip.shapeSettings?.strokeColor === 'none' ? 'border-sky-500 shadow-md shadow-sky-500/20' : 'border-white/20'}`}
+                    title="No Outline (Transparent)"
+                  >
+                    <div className="absolute w-[1.5px] h-full bg-red-500 rotate-45" />
+                  </button>
+
+                  {['#ffffff', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#000000'].map(c => (
+                    <button
+                      key={c}
+                      onClick={() => {
+                        updateClip(selectedClip.id, {
+                          shapeSettings: {
+                            ...selectedClip.shapeSettings,
+                            strokeColor: c
+                          } as any
+                        });
+                      }}
+                      className={`w-5 h-5 rounded-full border cursor-pointer hover:scale-110 transition ${selectedClip.shapeSettings?.strokeColor === c ? 'border-sky-500 shadow-md shadow-sky-500/20' : 'border-white/10'}`}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Stroke Width */}
+            <div className="flex flex-col gap-2">
+              <div className="flex justify-between text-[10px] text-gray-400 font-semibold">
+                <span>Outline Width</span>
+                <span className="font-mono text-gray-300">{selectedClip.shapeSettings.strokeWidth !== undefined ? selectedClip.shapeSettings.strokeWidth : 3}px</span>
+              </div>
+              <input 
+                type="range" 
+                min="0" 
+                max="20" 
+                value={selectedClip.shapeSettings.strokeWidth !== undefined ? selectedClip.shapeSettings.strokeWidth : 3} 
+                onChange={(e) => {
+                  updateClip(selectedClip.id, {
+                    shapeSettings: {
+                      ...selectedClip.shapeSettings,
+                      strokeWidth: Number(e.target.value)
+                    } as any
+                  });
+                }}
+                className="w-full h-1 bg-[#121214] rounded-lg appearance-none cursor-pointer accent-sky-500 focus:outline-none"
+              />
+            </div>
+
+            {/* Shape Original Size (Width & Height) */}
+            <div className="flex flex-col gap-3 border-t border-zinc-800/80 pt-3">
+              <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-wide">Shape Dimensions</span>
+
+              {/* Width */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between text-[10px] text-gray-400 font-semibold">
+                  <span>Width</span>
+                  <span className="font-mono text-gray-300">{selectedClip.shapeSettings?.width || 300}px</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="20" 
+                  max="1000" 
+                  value={selectedClip.shapeSettings?.width || 300} 
+                  onChange={(e) => {
+                    updateClip(selectedClip.id, {
+                      shapeSettings: {
+                        ...selectedClip.shapeSettings,
+                        width: Number(e.target.value)
+                      } as any
+                    });
+                  }}
+                  className="w-full h-1 bg-[#121214] rounded-lg appearance-none cursor-pointer accent-sky-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Height */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between text-[10px] text-gray-400 font-semibold">
+                  <span>Height</span>
+                  <span className="font-mono text-gray-300">{selectedClip.shapeSettings?.height || 300}px</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="20" 
+                  max="1000" 
+                  value={selectedClip.shapeSettings?.height || 300} 
+                  onChange={(e) => {
+                    updateClip(selectedClip.id, {
+                      shapeSettings: {
+                        ...selectedClip.shapeSettings,
+                        height: Number(e.target.value)
+                      } as any
+                    });
+                  }}
+                  className="w-full h-1 bg-[#121214] rounded-lg appearance-none cursor-pointer accent-sky-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Manual Scale, Position & Rotation */}
+            <div className="border-t border-zinc-800/80 pt-3 flex flex-col gap-3">
+              <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-wide">Transform Controls</span>
+              
+              {/* Scale */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between text-[10px] text-gray-400 font-semibold">
+                  <span>Scale</span>
+                  <span className="font-mono text-gray-300">{transform.scale}%</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="5" 
+                  max="300" 
+                  value={transform.scale} 
+                  onChange={(e) => handleTransformChange('scale', Number(e.target.value))}
+                  className="w-full h-1 bg-[#121214] rounded-lg appearance-none cursor-pointer accent-sky-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Position X */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between text-[10px] text-gray-400 font-semibold">
+                  <span>Position X</span>
+                  <span className="font-mono text-gray-300">{transform.x}px</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="-1000" 
+                  max="1000" 
+                  value={transform.x} 
+                  onChange={(e) => handleTransformChange('x', Number(e.target.value))}
+                  className="w-full h-1 bg-[#121214] rounded-lg appearance-none cursor-pointer accent-sky-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Position Y */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between text-[10px] text-gray-400 font-semibold">
+                  <span>Position Y</span>
+                  <span className="font-mono text-gray-300">{transform.y}px</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="-1000" 
+                  max="1000" 
+                  value={transform.y} 
+                  onChange={(e) => handleTransformChange('y', Number(e.target.value))}
+                  className="w-full h-1 bg-[#121214] rounded-lg appearance-none cursor-pointer accent-sky-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Rotation */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between text-[10px] text-gray-400 font-semibold">
+                  <span>Rotation</span>
+                  <span className="font-mono text-gray-300">{transform.rotation}°</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="0" 
+                  max="360" 
+                  value={transform.rotation} 
+                  onChange={(e) => handleTransformChange('rotation', Number(e.target.value))}
+                  className="w-full h-1 bg-[#121214] rounded-lg appearance-none cursor-pointer accent-sky-500 focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Tab 1: Video Settings (Transforms & Trim offsets) */}
         {selectedClip.type !== 'text' && activeTab === 'video' && (

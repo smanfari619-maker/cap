@@ -43,6 +43,7 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
     : 'none';
 
   const [isGeneratingCaptions, setIsGeneratingCaptions] = useState(false);
+  const [stickerMode, setStickerMode] = useState<'emoji' | 'shape'>('emoji');
   const [captionsProgress, setCaptionsProgress] = useState(0);
   const [captionsStage, setCaptionsStage] = useState('Generating audio transcript...');
   const [aiBpm, setAiBpm] = useState(110);
@@ -50,7 +51,7 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
   const [aiDuration, setAiDuration] = useState(30);
   const [isGeneratingSoundtrack, setIsGeneratingSoundtrack] = useState(false);
 
-  const handleAddTextPreset = async (styleType: 'standard' | 'tiktok' | 'sub' | 'cinematic') => {
+  const handleAddTextPreset = async (styleType: string) => {
     const textTrack = project?.tracks.find(t => t.type === 'text');
     if (!textTrack || !project) return;
 
@@ -60,23 +61,92 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
     let fontFamily = 'Inter';
     let content = 'Edit Text';
     let color = '#ffffff';
+    let fontWeight = 'normal';
+    let fontStyle = 'normal';
 
     if (styleType === 'tiktok') {
-      name = 'TikTok Bold';
-      fontFamily = 'Impact';
+      name = 'TikTok Montserrat';
+      fontFamily = 'Montserrat';
       fontSize = 36;
-      content = 'TEXT STICKER';
+      content = 'TRENDING CLIPS';
       color = '#fcd34d';
-    } else if (styleType === 'sub') {
-      name = 'Subtitle';
-      fontFamily = 'Georgia';
-      fontSize = 18;
-      content = 'Dialogue text goes here...';
+      fontWeight = '900';
+    } else if (styleType === 'bebas') {
+      name = 'Bebas Neue Gold';
+      fontFamily = 'Bebas Neue';
+      fontSize = 44;
+      content = 'CINEMATIC HEADER';
+      color = '#fbbf24';
+      fontWeight = '800';
+    } else if (styleType === 'syne') {
+      name = 'Syne Purple';
+      fontFamily = 'Syne';
+      fontSize = 32;
+      content = 'CREATIVE LAB';
+      color = '#c084fc';
+      fontWeight = '800';
     } else if (styleType === 'cinematic') {
-      name = 'Cinematic Title';
+      name = 'Cinzel Luxury';
+      fontFamily = 'Cinzel';
+      fontSize = 32;
+      content = 'THE CINEMATIC TITLE';
+      color = '#ffffff';
+      fontWeight = '700';
+    } else if (styleType === 'playfair') {
+      name = 'Playfair Coral';
+      fontFamily = 'Playfair Display';
+      fontSize = 30;
+      content = 'Editorial Title Style';
+      color = '#fca5a5';
+      fontWeight = '600';
+      fontStyle = 'italic';
+    } else if (styleType === 'satisfy') {
+      name = 'Satisfy Script';
+      fontFamily = 'Satisfy';
+      fontSize = 34;
+      content = 'Handwritten Signature';
+      color = '#fb7185';
+    } else if (styleType === 'standard') {
+      name = 'Standard Clean';
+      fontFamily = 'Inter';
+      fontSize = 24;
+      content = 'Simple Text';
+      color = '#ffffff';
+      fontWeight = '500';
+    } else if (styleType === 'sub') {
+      name = 'Outfit Subtitle';
+      fontFamily = 'Outfit';
+      fontSize = 20;
+      content = 'Dialogue text goes here...';
+      color = '#10b981';
+      fontWeight = '600';
+    } else if (styleType === 'space') {
+      name = 'Space Grotesk Tech';
+      fontFamily = 'Space Grotesk';
+      fontSize = 22;
+      content = 'SYSTEM_ACTIVE_';
+      color = '#38bdf8';
+      fontWeight = '700';
+    } else if (styleType === 'impact') {
+      name = 'Impact Bold Red';
+      fontFamily = 'Impact';
+      fontSize = 42;
+      content = 'CRITICAL ALERT';
+      color = '#ef4444';
+      fontWeight = '900';
+    } else if (styleType === 'georgia') {
+      name = 'Georgia Classic';
+      fontFamily = 'Georgia';
+      fontSize = 26;
+      content = 'Classic warm serif...';
+      color = '#fef08a';
+    } else if (styleType === 'courier') {
+      name = 'Courier Typewriter';
       fontFamily = 'Courier New';
-      fontSize = 28;
-      content = 'THE TITLE';
+      fontSize = 22;
+      content = 'SYS_RUNNING_OK';
+      color = '#22c55e';
+      fontWeight = '700';
     }
 
     const newTextClip = {
@@ -87,11 +157,14 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
       trimStartMs: 0,
       trimEndMs: 4000,
       positionMs: useEditorStore.getState().currentTime,
+      trackId: textTrack.id,
       textSettings: {
         content,
         color,
         fontSize,
         fontFamily,
+        fontWeight,
+        fontStyle,
         x: 0.5,
         y: 0.5,
         scale: 1.0
@@ -126,6 +199,47 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
       }
     };
     await addClip(textTrack.id, newTextClip);
+    setSelectedClipId(clipId);
+  };
+
+  const handleAddShape = async (shapeType: 'circle' | 'rectangle' | 'triangle' | 'arrow' | 'star') => {
+    let videoTrack = project?.tracks.find(t => t.type === 'video');
+    if (!project) return;
+    if (!videoTrack) {
+      await addTrack('video');
+      const updated = useEditorStore.getState().project;
+      videoTrack = updated?.tracks.find(t => t.type === 'video');
+    }
+    if (!videoTrack) return;
+
+    const clipId = Math.random().toString(36).substring(2, 9);
+    const newShapeClip = {
+      id: clipId,
+      type: 'image' as const,
+      name: `Shape (${shapeType})`,
+      assetId: `shape_${shapeType}`,
+      durationMs: 4000,
+      trimStartMs: 0,
+      trimEndMs: 4000,
+      positionMs: useEditorStore.getState().currentTime,
+      shapeSettings: {
+        type: shapeType,
+        color: '#8b5cf6', // default violet color
+        strokeColor: '#ffffff',
+        strokeWidth: 3,
+        width: 300,
+        height: 300
+      },
+      transform: {
+        scale: 40,
+        x: 0,
+        y: 0,
+        rotation: 0,
+        uniformScale: true,
+        blendMode: 'normal'
+      }
+    };
+    await addClip(videoTrack.id, newShapeClip);
     setSelectedClipId(clipId);
   };
 
@@ -472,23 +586,69 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
         {activeTab === 'text' && (
           <div className="flex-1 flex flex-col overflow-hidden">
             <div className="p-3 border-b border-[#2c2c32]">
-              <h3 className="font-bold text-xs uppercase tracking-wider text-gray-400">Text Effects</h3>
+              <h3 className="font-bold text-xs uppercase tracking-wider text-gray-400">Typography Presets</h3>
             </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-2.5 custom-scrollbar">
+            
+            <div className="flex-1 overflow-y-auto p-3 space-y-4 custom-scrollbar">
               {[
-                { type: 'standard', title: 'Standard Text', desc: 'Simple white Inter overlay' },
-                { type: 'tiktok', title: 'TikTok Gold', desc: 'Impact font with bold yellow fill' },
-                { type: 'sub', title: 'Karaoke Subtitle', desc: 'Georgia centered dialogues' },
-                { type: 'cinematic', title: 'Cinematic Title', desc: 'Monospace vintage screen title' }
-              ].map(preset => (
-                <button
-                  key={preset.type}
-                  onClick={() => handleAddTextPreset(preset.type as any)}
-                  className="w-full text-left p-2.5 bg-[#121214] border border-[#2c2c32] hover:border-sky-500 rounded-lg transition"
-                >
-                  <p className="text-xs font-semibold text-gray-200">{preset.title}</p>
-                  <p className="text-[10px] text-gray-500 mt-0.5">{preset.desc}</p>
-                </button>
+                {
+                  categoryName: 'High Energy & Display',
+                  presets: [
+                    { type: 'tiktok', title: 'TikTok Montserrat', desc: 'Bold uppercase title', previewText: 'TRENDING CLIPS', fontFamily: 'Montserrat', color: '#fcd34d', weight: '900', transform: 'uppercase', previewSize: '11px' },
+                    { type: 'bebas', title: 'Bebas Cinematic', desc: 'Sleek headline title', previewText: 'CINEMATIC HEADER', fontFamily: 'Bebas Neue', color: '#fbbf24', previewSize: '15px' },
+                    { type: 'syne', title: 'Creative Lab', desc: 'Artistic expanded text', previewText: 'CREATIVE LAB', fontFamily: 'Syne', color: '#c084fc', weight: '800', previewSize: '11px' },
+                    { type: 'impact', title: 'Impact Alert', desc: 'Retro bold red header', previewText: 'CRITICAL ALERT', fontFamily: 'Impact', color: '#ef4444', previewSize: '11px' }
+                  ]
+                },
+                {
+                  categoryName: 'Classic & Elegant',
+                  presets: [
+                    { type: 'cinematic', title: 'Cinzel Serif', desc: 'Luxurious Roman text', previewText: 'THE CINEMATIC TITLE', fontFamily: 'Cinzel', color: '#ffffff', weight: '700', previewSize: '11px', spacing: '1px' },
+                    { type: 'playfair', title: 'Playfair Coral', desc: 'Magazine layout style', previewText: 'Editorial Style', fontFamily: 'Playfair Display', color: '#fca5a5', weight: '600', previewSize: '12px' },
+                    { type: 'satisfy', title: 'Satisfy Signature', desc: 'Fluid signature script', previewText: 'Signature style', fontFamily: 'Satisfy', color: '#fb7185', previewSize: '13px' },
+                    { type: 'georgia', title: 'Georgia Classic', desc: 'Classic warm body serif', previewText: 'Warm Serif style', fontFamily: 'Georgia', color: '#fef08a', previewSize: '11px' }
+                  ]
+                },
+                {
+                  categoryName: 'Clean & Tech',
+                  presets: [
+                    { type: 'standard', title: 'Standard Clean', desc: 'Minimalist clean Inter', previewText: 'Simple Text', fontFamily: 'Inter', color: '#ffffff', weight: '500', previewSize: '12px' },
+                    { type: 'sub', title: 'Outfit Subtitle', desc: 'Clean emerald captions', previewText: 'Dialogue caption...', fontFamily: 'Outfit', color: '#10b981', weight: '600', previewSize: '10px' },
+                    { type: 'space', title: 'Space Tech', desc: 'Technical monospace', previewText: 'SYSTEM_ACTIVE_', fontFamily: 'Space Grotesk', color: '#38bdf8', weight: '700', previewSize: '11px', spacing: '-0.5px' },
+                    { type: 'courier', title: 'Courier Typewriter', desc: 'Green console monospace', previewText: 'SYS_RUNNING_OK', fontFamily: 'Courier New', color: '#22c55e', weight: '700', previewSize: '11px' }
+                  ]
+                }
+              ].map(category => (
+                <div key={category.categoryName} className="space-y-2">
+                  <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider px-1">{category.categoryName}</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {category.presets.map((preset: any) => (
+                      <button
+                        key={preset.type}
+                        onClick={() => handleAddTextPreset(preset.type)}
+                        className="w-full text-left p-2 bg-[#0e0e10]/60 border border-[#2c2c32] hover:border-sky-500 rounded-lg transition hover:bg-[#121214] flex flex-col justify-between"
+                      >
+                        <div>
+                          <p className="text-[10px] font-semibold text-gray-200 truncate">{preset.title}</p>
+                          <p className="text-[8px] text-gray-500 mt-0.5 truncate">{preset.desc}</p>
+                        </div>
+                        {/* Visual Styled Font Preview Card */}
+                        <div className="h-9 w-full mt-1.5 bg-[#121214] rounded border border-[#2c2c32]/50 flex items-center justify-center overflow-hidden px-1">
+                          <span style={{
+                            fontFamily: preset.fontFamily,
+                            color: preset.color,
+                            fontSize: preset.previewSize,
+                            fontWeight: preset.weight as any,
+                            letterSpacing: preset.spacing || 'normal',
+                            textTransform: preset.transform as any
+                          }} className="truncate">
+                            {preset.previewText}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
@@ -497,21 +657,90 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
         {/* Stickers Tab */}
         {activeTab === 'stickers' && (
           <div className="flex-1 flex flex-col overflow-hidden">
-            <div className="p-3 border-b border-[#2c2c32]">
-              <h3 className="font-bold text-xs uppercase tracking-wider text-gray-400">Stickers & Emojis</h3>
-            </div>
-            <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
-              <div className="grid grid-cols-4 gap-2">
-                {['❤️', '🔥', '✨', '😂', '👍', '🎉', '🚀', '💡', '🎬', '📱', '❌', '✅', '💥', '👀', '⭐', '🎈', '❤️‍🔥', '🤯', '😭', '⚡'].map(emoji => (
-                  <button
-                    key={emoji}
-                    onClick={() => handleAddSticker(emoji)}
-                    className="flex items-center justify-center h-12 hover:scale-110 transition bg-[#121214] border border-[#2c2c32] hover:border-sky-500 rounded text-2xl"
-                  >
-                    {emoji}
-                  </button>
-                ))}
+            <div className="p-3 border-b border-[#2c2c32] flex flex-col gap-2">
+              <h3 className="font-bold text-xs uppercase tracking-wider text-gray-400">Stickers & Elements</h3>
+              {/* Sub-tab switcher */}
+              <div className="flex bg-[#121214] border border-[#2c2c32] rounded p-0.5 text-[9px] font-bold">
+                <button
+                  onClick={() => setStickerMode('emoji')}
+                  className={`flex-1 py-1 rounded transition text-center cursor-pointer ${stickerMode === 'emoji' ? 'bg-zinc-800 text-sky-400' : 'text-gray-400 hover:text-gray-200'}`}
+                >
+                  Emojis
+                </button>
+                <button
+                  onClick={() => setStickerMode('shape')}
+                  className={`flex-1 py-1 rounded transition text-center cursor-pointer ${stickerMode === 'shape' ? 'bg-zinc-800 text-sky-400' : 'text-gray-400 hover:text-gray-200'}`}
+                >
+                  Shapes
+                </button>
               </div>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
+              {stickerMode === 'emoji' ? (
+                <div className="grid grid-cols-4 gap-2">
+                  {['❤️', '🔥', '✨', '😂', '👍', '🎉', '🚀', '💡', '🎬', '📱', '❌', '✅', '💥', '👀', '⭐', '🎈', '❤️‍🔥', '🤯', '😭', '⚡'].map(emoji => (
+                    <button
+                      key={emoji}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('application/cap-emoji', emoji);
+                        e.dataTransfer.effectAllowed = 'copy';
+                      }}
+                      onClick={() => handleAddSticker(emoji)}
+                      className="flex items-center justify-center h-12 hover:scale-110 transition bg-[#121214] border border-[#2c2c32] hover:border-sky-500 rounded text-2xl cursor-pointer"
+                      title="Click or Drag to Timeline"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2.5">
+                  {[
+                    {
+                      type: 'circle' as const,
+                      name: 'Circle',
+                      svg: <svg viewBox="0 0 100 100" className="w-7 h-7 fill-sky-500"><circle cx="50" cy="50" r="38" /></svg>
+                    },
+                    {
+                      type: 'rectangle' as const,
+                      name: 'Rectangle',
+                      svg: <svg viewBox="0 0 100 100" className="w-7 h-7 fill-sky-500"><rect x="15" y="25" width="70" height="50" rx="5" /></svg>
+                    },
+                    {
+                      type: 'triangle' as const,
+                      name: 'Triangle',
+                      svg: <svg viewBox="0 0 100 100" className="w-7 h-7 fill-sky-500"><polygon points="50,15 15,82 85,82" /></svg>
+                    },
+                    {
+                      type: 'arrow' as const,
+                      name: 'Arrow',
+                      svg: <svg viewBox="0 0 100 100" className="w-7 h-7 fill-sky-500"><polygon points="10,38 58,38 58,20 90,50 58,80 58,62 10,62" /></svg>
+                    },
+                    {
+                      type: 'star' as const,
+                      name: 'Star',
+                      svg: <svg viewBox="0 0 100 100" className="w-7 h-7 fill-sky-500"><polygon points="50,10 63,38 93,38 69,56 78,86 50,68 22,86 31,56 7,38 37,38" /></svg>
+                    }
+                  ].map(shape => (
+                    <button
+                      key={shape.type}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('application/cap-shape', shape.type);
+                        e.dataTransfer.effectAllowed = 'copy';
+                      }}
+                      onClick={() => handleAddShape(shape.type)}
+                      className="flex flex-col gap-1.5 items-center justify-center p-3 hover:border-sky-500 bg-[#121214] border border-[#2c2c32] rounded transition cursor-pointer hover:bg-[#1a1a20]"
+                      title="Click or Drag to Timeline"
+                    >
+                      {shape.svg}
+                      <span className="text-[9px] text-gray-400 font-semibold">{shape.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -652,6 +881,12 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
                 {[
                   { id: 'none', name: 'None' },
                   { id: 'cinematic', name: 'Cinematic' },
+                  { id: 'sunset', name: 'Sunset Glow' },
+                  { id: 'nordic', name: 'Cold Nordic' },
+                  { id: 'neon', name: 'Cyber Retro' },
+                  { id: 'emerald', name: 'Emerald Film' },
+                  { id: 'fade', name: 'Vintage Fade' },
+                  { id: 'drama', name: 'High Drama' },
                   { id: 'bw', name: 'Noir B&W' },
                   { id: 'vintage', name: 'Vintage' },
                   { id: 'warm', name: 'Golden' },
@@ -842,6 +1077,18 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
 
 const getFilterPreviewStyle = (filterId: string) => {
   switch (filterId) {
+    case 'sunset':
+      return { filter: 'saturate(140%) brightness(105%) sepia(30%) hue-rotate(-10deg) contrast(105%)' };
+    case 'nordic':
+      return { filter: 'hue-rotate(185deg) saturate(75%) contrast(110%) brightness(95%)' };
+    case 'neon':
+      return { filter: 'hue-rotate(280deg) saturate(140%) contrast(115%)' };
+    case 'emerald':
+      return { filter: 'hue-rotate(85deg) saturate(85%) contrast(95%) sepia(20%)' };
+    case 'fade':
+      return { filter: 'contrast(75%) saturate(85%) brightness(110%) sepia(10%)' };
+    case 'drama':
+      return { filter: 'contrast(135%) saturate(60%) brightness(90%)' };
     case 'bw':
       return { filter: 'grayscale(100%)' };
     case 'sepia':

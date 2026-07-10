@@ -5,74 +5,37 @@ import { useEditorStore } from '../store/editorStore';
 /**
  * Reads a video file and detects scene cuts by comparing downsampled pixel brightness deltas.
  */
-export async function detectSceneCuts(file: File): Promise<number[]> {
-  return new Promise((resolve) => {
-    const video = document.createElement('video');
-    video.src = URL.createObjectURL(file);
-    video.muted = true;
-    video.playsInline = true;
-    
-    const canvas = document.createElement('canvas');
-    canvas.width = 60;
-    canvas.height = 36;
-    const ctx = canvas.getContext('2d')!;
+export async function detectSceneCuts(
+  file: File,
+  onProgress?: (progress: number) => void
+): Promise<number[]> {
+  const arrayBuffer = await file.arrayBuffer();
+  
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(
+      new URL('../workers/scene-detect.worker.ts', import.meta.url),
+      { type: 'module' }
+    );
 
-    const cuts: number[] = [];
-    let prevData: Uint8ClampedArray | null = null;
-    
-    // Check frames at 500ms intervals
-    const intervalS = 0.5; 
-    let currentSeek = 0.5;
-
-    video.onloadedmetadata = () => {
-      const duration = video.duration;
-      
-      const seekNext = () => {
-        if (currentSeek >= duration - 0.2) {
-          URL.revokeObjectURL(video.src);
-          resolve(cuts);
-          return;
-        }
-        video.currentTime = currentSeek;
-      };
-
-      video.onseeked = () => {
-        try {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const data = imgData.data;
-
-          if (prevData) {
-            let diffSum = 0;
-            for (let i = 0; i < data.length; i += 4) {
-              const rDiff = Math.abs(data[i] - prevData[i]);
-              const gDiff = Math.abs(data[i+1] - prevData[i+1]);
-              const bDiff = Math.abs(data[i+2] - prevData[i+2]);
-              diffSum += (rDiff + gDiff + bDiff) / 3;
-            }
-            const averageDiff = diffSum / (canvas.width * canvas.height);
-            
-            // Brightness delta threshold peak indicating scene changes
-            if (averageDiff > 28) {
-              cuts.push(currentSeek * 1000);
-            }
-          }
-          prevData = data;
-        } catch (e) {
-          // ignore draw frame errors on missing tracks
-        }
-        
-        currentSeek += intervalS;
-        seekNext();
-      };
-
-      seekNext();
+    worker.onmessage = (event) => {
+      const { type, pct, cuts, error } = event.data;
+      if (type === 'progress') {
+        onProgress?.(pct);
+      } else if (type === 'done') {
+        worker.terminate();
+        resolve(cuts);
+      } else if (type === 'error') {
+        worker.terminate();
+        reject(new Error(error));
+      }
     };
 
-    video.onerror = () => {
-      URL.revokeObjectURL(video.src);
-      resolve([]);
+    worker.onerror = (err) => {
+      worker.terminate();
+      reject(err);
     };
+
+    worker.postMessage({ arrayBuffer }, [arrayBuffer]);
   });
 }
 
@@ -80,9 +43,13 @@ export async function detectSceneCuts(file: File): Promise<number[]> {
  * Triggers sequential split actions descending from right-to-left at detected scene cuts.
  *
  * @param clipId ID of the clip to scan and split
+ * @param onProgress Progress callback
  * @returns number of splits made
  */
-export async function autoCutVideoClip(clipId: string): Promise<number> {
+export async function autoCutVideoClip(
+  clipId: string,
+  onProgress?: (progress: number) => void
+): Promise<number> {
   const store = useEditorStore.getState();
   const project = store.project;
   if (!project) return 0;
@@ -94,7 +61,7 @@ export async function autoCutVideoClip(clipId: string): Promise<number> {
   if (!asset || !asset.opfsPath) return 0;
 
   const file = await getFileFromOPFS(asset.opfsPath);
-  const cuts = await detectSceneCuts(file);
+  const cuts = await detectSceneCuts(file, onProgress);
 
   if (cuts.length === 0) return 0;
 

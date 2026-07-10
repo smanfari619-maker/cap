@@ -2,6 +2,7 @@ import { pipeline, env } from '@xenova/transformers';
 
 // Configure ONNX Runtime to use CDN assets
 env.allowLocalModels = false;
+env.backends.onnx.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/';
 
 let transcriber: any = null;
 
@@ -38,7 +39,6 @@ self.addEventListener('message', async (event: MessageEvent) => {
       chunk_length_s: 30,
       stride_length_s: 5,
       return_timestamps: true,
-      force_decoder_prompt_ids: [50259], // Force English to avoid language hallucination loops
     });
 
     const chunks = result.chunks || [];

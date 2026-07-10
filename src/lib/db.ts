@@ -24,8 +24,8 @@ export interface TimelineClip {
   trimEndMs: number;   // Trim end offset in source asset (ms)
   positionMs: number;  // Position on timeline (ms)
   trackId: string;
-  disabled?: boolean;  // Disable playback & rendering of this clip
-  
+  disabled?: boolean;     // Disable playback & rendering of this clip
+  enhanceVideo?: boolean; // Toggle video enhancement (contrast + saturation boost)
   
   // Speed & Audio
   speed?: number;
@@ -90,6 +90,8 @@ export interface TimelineClip {
     // Spacing
     letterSpacing?: number;
     lineHeight?: number;
+    fontWeight?: string;
+    fontStyle?: string;
   };
 
   // Visual transform settings (scale, translation, rotation, blend mode)
@@ -160,6 +162,15 @@ export interface TimelineClip {
       b?: { x: number; y: number }[];
       rgb?: { x: number; y: number }[];
     };
+  };
+  // Shape Settings for vector shape overlays
+  shapeSettings?: {
+    type: 'circle' | 'rectangle' | 'triangle' | 'arrow' | 'star';
+    color: string;
+    strokeColor?: string;
+    strokeWidth?: number;
+    width?: number;
+    height?: number;
   };
 }
 

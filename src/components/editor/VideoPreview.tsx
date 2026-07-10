@@ -9,6 +9,8 @@ import { applyTransitionTransform, drawTransitionOverlay, applyWipeClip } from '
 import { buildEffectFilterString, applyCanvasEffect } from '../../lib/effects-registry';
 import { getSubjectFaceCenter } from '../../lib/face-tracker';
 import PlaybackControls from './preview/PlaybackControls';
+import { MediaPipeSelfieSegmentation } from '../../lib/background-segmenter';
+import { webglPipeline } from '../../lib/webgl-pipeline';
 
 export default function VideoPreview() {
   const project = useEditorStore(state => state.project);
@@ -37,10 +39,16 @@ export default function VideoPreview() {
   const lutCacheRef = useRef<Map<string, Lut3D>>(new Map());
   const smoothedRefX = useRef<Record<string, number>>({});
   const videoFrameCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const segmenterRef = useRef<MediaPipeSelfieSegmentation | null>(null);
+  const segmentationMasksRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const segmenterFrameCounterRef = useRef<number>(0);
+  const segmenterProcessingRef = useRef<boolean>(false);
   const [assetsLoaded, setAssetsLoaded] = useState(false);
   const [totalDuration, setTotalDuration] = useState(0);
   const [snapX, setSnapX] = useState(false);
   const [snapY, setSnapY] = useState(false);
+  const [compareMode, setCompareMode] = useState(false);
+  const [splitRatio, setSplitRatio] = useState(0.5);
 
   // Web Audio Context and Routing references for real-time audio EQ preview
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -282,6 +290,10 @@ export default function VideoPreview() {
       if (currentAudioCtx.current) {
         currentAudioCtx.current.close();
         currentAudioCtx.current = null;
+      }
+      if (segmenterRef.current) {
+        segmenterRef.current.close().catch(err => console.warn("Failed to close segmenter on unmount:", err));
+        segmenterRef.current = null;
       }
     };
   }, []);
@@ -597,27 +609,58 @@ export default function VideoPreview() {
           const media = clip.type === 'video' && !isAIAvatar ? (mediaElementsRef.current.get(`${clip.id}_${clip.assetId}`) as HTMLVideoElement | undefined) : null;
           const img = clip.type === 'image' ? imageElementsRef.current.get(clip.assetId) : null;
 
+          const isShape = clip.type === 'image' && !!clip.shapeSettings;
           // During transitions allow falling back to cache even if media isn't ready
           const clipCacheForReady = videoFrameCacheRef.current.get(clip.id);
           const isMediaReadyOrCached = isAIAvatar
+            || isShape
             || (media && (media.readyState >= 2 || (clipCacheForReady && clipCacheForReady.width > 0)))
             || (img && img.complete && img.naturalWidth > 0);
 
           if (isMediaReadyOrCached) {
-            
-            // Build filter string from colorAdjustments and filterSettings
-            let filterString = '';
+            const passes = (compareMode && clip.enhanceVideo) ? ['before', 'after'] : ['normal'];
+            for (const pass of passes) {
+              ctx.save();
+              if (pass === 'before') {
+                ctx.beginPath();
+                ctx.rect(0, 0, canvas.width * splitRatio, canvas.height);
+                ctx.clip();
+              } else if (pass === 'after') {
+                ctx.beginPath();
+                ctx.rect(canvas.width * splitRatio, 0, canvas.width * (1.0 - splitRatio), canvas.height);
+                ctx.clip();
+              }
 
-            // Apply color adjustments
-            if (clip.colorAdjustments) {
-              const { brightness, contrast, saturation } = clip.colorAdjustments;
-              filterString += `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%) `;
-            }
+              // Build filter string from colorAdjustments and filterSettings
+              let filterString = '';
+
+              // Apply color adjustments
+              if (clip.colorAdjustments) {
+                const { brightness, contrast, saturation } = clip.colorAdjustments;
+                filterString += `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%) `;
+              }
+
+              const shouldEnhance = (pass === 'normal' && clip.enhanceVideo) || pass === 'after';
+              if (shouldEnhance) {
+                filterString += 'contrast(1.15) saturate(1.15) brightness(1.02) ';
+              }
 
             // Apply filter presets
             if (clip.filterSettings && clip.filterSettings.type !== 'none') {
               const { type, intensity } = clip.filterSettings;
-              if (type === 'bw') {
+              if (type === 'sunset') {
+                filterString += `saturate(${100 + intensity * 0.4}%) brightness(${100 + intensity * 0.05}%) sepia(${intensity * 0.3}%) hue-rotate(${-intensity * 0.1}deg) contrast(${100 + intensity * 0.05}%) `;
+              } else if (type === 'nordic') {
+                filterString += `hue-rotate(${185 * intensity / 100}deg) saturate(${100 - intensity * 0.25}%) contrast(${100 + intensity * 0.1}%) brightness(${100 - intensity * 0.05}%) `;
+              } else if (type === 'neon') {
+                filterString += `hue-rotate(${280 * intensity / 100}deg) saturate(${100 + intensity * 0.4}%) contrast(${100 + intensity * 0.15}%) `;
+              } else if (type === 'emerald') {
+                filterString += `hue-rotate(${85 * intensity / 100}deg) saturate(${100 - intensity * 0.15}%) contrast(${100 - intensity * 0.05}%) sepia(${intensity * 0.2}%) `;
+              } else if (type === 'fade') {
+                filterString += `contrast(${100 - intensity * 0.25}%) saturate(${100 - intensity * 0.15}%) brightness(${100 + intensity * 0.1}%) sepia(${intensity * 0.1}%) `;
+              } else if (type === 'drama') {
+                filterString += `contrast(${100 + intensity * 0.35}%) saturate(${100 - intensity * 0.4}%) brightness(${100 - intensity * 0.1}%) `;
+              } else if (type === 'bw') {
                 filterString += `grayscale(${intensity}%) `;
               } else if (type === 'sepia') {
                 filterString += `sepia(${intensity}%) `;
@@ -730,6 +773,99 @@ export default function VideoPreview() {
                 offCtx.translate(offscreen.width / 2, offscreen.height / 2);
                 drawAIAvatar(offCtx as CanvasRenderingContext2D, preset, clipOffset, offscreen.width, offscreen.height, isPlaying);
                 offCtx.restore();
+              } else if (isShape && clip.shapeSettings) {
+                // Calculate aspect ratio preserving destination rectangle (contain fit)
+                const sourceWidth = clip.shapeSettings.width || 300;
+                const sourceHeight = clip.shapeSettings.height || 300;
+                const srcRatio = sourceWidth / sourceHeight;
+                const destRatio = offscreen.width / offscreen.height;
+
+                let dWidth = offscreen.width;
+                let dHeight = offscreen.height;
+                let dx = 0;
+                let dy = 0;
+                if (srcRatio > destRatio) {
+                  dHeight = offscreen.width / srcRatio;
+                  dy = (offscreen.height - dHeight) / 2;
+                } else {
+                  dWidth = offscreen.height * srcRatio;
+                  dx = (offscreen.width - dWidth) / 2;
+                }
+
+                offCtx.save();
+                offCtx.fillStyle = clip.shapeSettings.color || '#3b82f6';
+                offCtx.strokeStyle = clip.shapeSettings.strokeColor || '#ffffff';
+                offCtx.lineWidth = clip.shapeSettings.strokeWidth !== undefined ? clip.shapeSettings.strokeWidth : 3;
+                offCtx.lineJoin = 'round';
+                offCtx.lineCap = 'round';
+
+                // Center coordinates and sizes relative to contain fit box
+                const cx = dx + dWidth / 2;
+                const cy = dy + dHeight / 2;
+                const type = clip.shapeSettings.type;
+
+                const fillVal = clip.shapeSettings.color;
+                const strokeVal = clip.shapeSettings.strokeColor;
+                const hasFill = fillVal && fillVal !== 'transparent' && fillVal !== 'none';
+                const hasStroke = offCtx.lineWidth > 0 && strokeVal && strokeVal !== 'transparent' && strokeVal !== 'none';
+
+                offCtx.beginPath();
+                if (type === 'circle') {
+                  const rx = Math.max(2, dWidth / 2 - offCtx.lineWidth);
+                  const ry = Math.max(2, dHeight / 2 - offCtx.lineWidth);
+                  offCtx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+                } else if (type === 'rectangle') {
+                  const strokeOffset = offCtx.lineWidth;
+                  offCtx.rect(cx - dWidth / 2 + strokeOffset, cy - dHeight / 2 + strokeOffset, Math.max(1, dWidth - strokeOffset * 2), Math.max(1, dHeight - strokeOffset * 2));
+                } else if (type === 'triangle') {
+                  const strokeOffset = offCtx.lineWidth;
+                  offCtx.moveTo(cx, cy - dHeight / 2 + strokeOffset);
+                  offCtx.lineTo(cx - dWidth / 2 + strokeOffset, cy + dHeight / 2 - strokeOffset);
+                  offCtx.lineTo(cx + dWidth / 2 - strokeOffset, cy + dHeight / 2 - strokeOffset);
+                  offCtx.closePath();
+                } else if (type === 'arrow') {
+                  const length = dWidth * 0.95;
+                  const thickness = dHeight * 0.3;
+                  offCtx.moveTo(cx - length / 2, cy - thickness / 2);
+                  offCtx.lineTo(cx + length / 6, cy - thickness / 2);
+                  offCtx.lineTo(cx + length / 6, cy - thickness);
+                  offCtx.lineTo(cx + length / 2, cy);
+                  offCtx.lineTo(cx + length / 6, cy + thickness);
+                  offCtx.lineTo(cx + length / 6, cy + thickness / 2);
+                  offCtx.lineTo(cx - length / 2, cy + thickness / 2);
+                  offCtx.closePath();
+                } else if (type === 'star') {
+                  const spikes = 5;
+                  const rx = Math.max(2, dWidth / 2 - offCtx.lineWidth);
+                  const ry = Math.max(2, dHeight / 2 - offCtx.lineWidth);
+                  const rxInner = rx / 2;
+                  const ryInner = ry / 2;
+                  let rot = Math.PI / 2 * 3;
+                  const step = Math.PI / spikes;
+
+                  offCtx.moveTo(cx, cy - ry);
+                  for (let i = 0; i < spikes; i++) {
+                    let x = cx + Math.cos(rot) * rx;
+                    let y = cy + Math.sin(rot) * ry;
+                    offCtx.lineTo(x, y);
+                    rot += step;
+
+                    x = cx + Math.cos(rot) * rxInner;
+                    y = cy + Math.sin(rot) * ryInner;
+                    offCtx.lineTo(x, y);
+                    rot += step;
+                  }
+                  offCtx.lineTo(cx, cy - ry);
+                  offCtx.closePath();
+                }
+
+                if (hasFill) {
+                  offCtx.fill();
+                }
+                if (hasStroke) {
+                  offCtx.stroke();
+                }
+                offCtx.restore();
               } else if (media || img) {
                 // Calculate aspect ratio preserving destination rectangle (contain fit)
                 const sourceWidth = media ? media.videoWidth : (img ? img.naturalWidth : offscreen.width);
@@ -807,6 +943,28 @@ export default function VideoPreview() {
                   }
                 }
 
+                // Fill letterbox "dead space" areas by drawing a blurred background of the same color pixels
+                if (dx > 0 || dy > 0) {
+                  let cWidth = offscreen.width;
+                  let cHeight = offscreen.height;
+                  let cX = 0;
+                  let cY = 0;
+                  if (srcRatio > destRatio) {
+                    cWidth = offscreen.height * srcRatio;
+                    cX = (offscreen.width - cWidth) / 2;
+                  } else {
+                    cHeight = offscreen.width / srcRatio;
+                    cY = (offscreen.height - cHeight) / 2;
+                  }
+                  offCtx.save();
+                  // Apply temporary heavy blur filter to background image
+                  offCtx.filter = 'blur(40px) brightness(0.65)';
+                  offCtx.drawImage(drawSource, cX, cY, cWidth, cHeight);
+                  offCtx.restore();
+                  // Reset filter for the foreground contain-fit image draw
+                  offCtx.filter = filterString.trim() || 'none';
+                }
+
                 offCtx.drawImage(drawSource, dx, dy, dWidth, dHeight);
 
                 // Draw dip-to-black / dip-to-white / flash overlay restricted to the clip box
@@ -841,128 +999,122 @@ export default function VideoPreview() {
                 }
               }
 
-              // Chroma Key Green Screen Removal
-              if (clip.chromaKey && clip.chromaKey.enabled) {
-                const imgData = offCtx.getImageData(0, 0, offscreen.width, offscreen.height);
-                const data = imgData.data;
-                const targetHex = clip.chromaKey.color || '#00ff00';
-                const rTarget = parseInt(targetHex.slice(1, 3), 16);
-                const gTarget = parseInt(targetHex.slice(3, 5), 16);
-                const bTarget = parseInt(targetHex.slice(5, 7), 16);
-                const tolerance = clip.chromaKey.tolerance || 30;
-                const feather = clip.chromaKey.feather || 10;
-
-                for (let i = 0; i < data.length; i += 4) {
-                  const r = data[i];
-                  const g = data[i+1];
-                  const b = data[i+2];
-                  const dist = Math.sqrt((r - rTarget)**2 + (g - gTarget)**2 + (b - bTarget)**2);
-                  if (dist < tolerance) {
-                    data[i+3] = 0;
-                  } else if (dist < tolerance + feather) {
-                    const ratio = (dist - tolerance) / feather;
-                    data[i+3] = Math.min(data[i+3], ratio * 255);
-                  }
-                }
-                offCtx.putImageData(imgData, 0, 0);
-              }
-
-              // AI Subject Background Removal/Blur
+              // AI Subject Background Removal/Blur (MediaPipe integration)
               if (clip.aiBackgroundRemoval && clip.aiBackgroundRemoval.enabled) {
-                const faceX = smoothedRefX.current[clip.id] !== undefined ? smoothedRefX.current[clip.id] : 0.5;
                 const mode = clip.aiBackgroundRemoval.mode || 'remove';
                 
-                const tempCanvas = document.createElement('canvas');
-                tempCanvas.width = offscreen.width;
-                tempCanvas.height = offscreen.height;
-                const tempCtx = tempCanvas.getContext('2d')!;
-                tempCtx.drawImage(offscreen, 0, 0);
-                
-                if (mode === 'blur') {
-                  offCtx.save();
-                  const radius = clip.aiBackgroundRemoval.blurRadius || 10;
-                  offCtx.filter = `blur(${radius}px)`;
-                  offCtx.drawImage(tempCanvas, 0, 0);
-                  offCtx.restore();
-                } else {
-                  offCtx.clearRect(0, 0, offscreen.width, offscreen.height);
+                // Lazy initialize the segmenter
+                if (!segmenterRef.current) {
+                  segmenterRef.current = new MediaPipeSelfieSegmentation();
+                  segmenterRef.current.init().catch(err => console.warn("Failed to initialize MediaPipe segmenter for live preview:", err));
                 }
-                
-                tempCtx.save();
-                tempCtx.globalCompositeOperation = 'destination-in';
-                
-                const grad = tempCtx.createRadialGradient(
-                  faceX * offscreen.width, offscreen.height * 0.45, offscreen.height * 0.15,
-                  faceX * offscreen.width, offscreen.height * 0.5, offscreen.height * 0.5
-                );
-                grad.addColorStop(0, 'rgba(0,0,0,1)');
-                grad.addColorStop(0.65, 'rgba(0,0,0,0.85)');
-                grad.addColorStop(1, 'rgba(0,0,0,0)');
-                
-                tempCtx.fillStyle = grad;
-                tempCtx.fillRect(0, 0, offscreen.width, offscreen.height);
-                tempCtx.restore();
-                
-                offCtx.drawImage(tempCanvas, 0, 0);
-              }
 
-              // HSL Shifts
-              if (clip.hslAdjustments) {
-                const hShift = clip.hslAdjustments.hue || 0;
-                const sShift = clip.hslAdjustments.saturation || 0;
-                const lShift = clip.hslAdjustments.lightness || 0;
+                segmenterFrameCounterRef.current++;
+                if (segmenterRef.current && !segmenterProcessingRef.current && segmenterFrameCounterRef.current % 3 === 0) {
+                  // Create a static copy of offscreen canvas
+                  const sendCanvas = document.createElement('canvas');
+                  sendCanvas.width = offscreen.width;
+                  sendCanvas.height = offscreen.height;
+                  const sendCtx = sendCanvas.getContext('2d')!;
+                  sendCtx.drawImage(offscreen, 0, 0);
 
-                if (hShift !== 0 || sShift !== 0 || lShift !== 0) {
-                  const imgData = offCtx.getImageData(0, 0, offscreen.width, offscreen.height);
-                  const data = imgData.data;
-                  for (let i = 0; i < data.length; i += 4) {
-                    if (data[i+3] === 0) continue;
-                    let r = data[i] / 255;
-                    let g = data[i+1] / 255;
-                    let b = data[i+2] / 255;
-                    const max = Math.max(r, g, b), min = Math.min(r, g, b);
-                    let h = 0, s = 0, l = (max + min) / 2;
-
-                    if (max !== min) {
-                      const d = max - min;
-                      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-                      switch (max) {
-                        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
-                        case g: h = (b - r) / d + 2; break;
-                        case b: h = (r - g) / d + 4; break;
-                      }
-                      h /= 6;
+                  segmenterProcessingRef.current = true;
+                  segmenterRef.current.onResults((results) => {
+                    let cachedCanvas = segmentationMasksRef.current.get(clip.id);
+                    if (!cachedCanvas) {
+                      cachedCanvas = document.createElement('canvas');
+                      segmentationMasksRef.current.set(clip.id, cachedCanvas);
                     }
-
-                    h = (h * 360 + hShift + 360) % 360 / 360;
-                    s = Math.max(0, Math.min(1, s + sShift / 100));
-                    l = Math.max(0, Math.min(1, l + lShift / 100));
-
-                    let rNew = l, gNew = l, bNew = l;
-                    if (s !== 0) {
-                      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-                      const p = 2 * l - q;
-                      const hue2rgb = (t: number) => {
-                        if (t < 0) t += 1;
-                        if (t > 1) t -= 1;
-                        if (t < 1/6) return p + (q - p) * 6 * t;
-                        if (t < 1/2) return q;
-                        if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
-                        return p;
-                      };
-                      rNew = hue2rgb(h + 1/3);
-                      gNew = hue2rgb(h);
-                      bNew = hue2rgb(h - 1/3);
+                    if (cachedCanvas.width !== offscreen.width || cachedCanvas.height !== offscreen.height) {
+                      cachedCanvas.width = offscreen.width;
+                      cachedCanvas.height = offscreen.height;
                     }
+                    const cCtx = cachedCanvas.getContext('2d')!;
+                    cCtx.clearRect(0, 0, cachedCanvas.width, cachedCanvas.height);
+                    cCtx.drawImage(results.segmentationMask, 0, 0, cachedCanvas.width, cachedCanvas.height);
+                    
+                    segmenterProcessingRef.current = false;
+                    if (!useEditorStore.getState().isPlaying) {
+                      drawRef.current();
+                    }
+                  });
 
-                    data[i] = Math.round(rNew * 255);
-                    data[i+1] = Math.round(gNew * 255);
-                    data[i+2] = Math.round(bNew * 255);
+                  segmenterRef.current.send(sendCanvas).catch((err) => {
+                    segmenterProcessingRef.current = false;
+                    console.warn("Selfie segmenter send error in preview:", err);
+                  });
+                }
+
+                // Apply background removal using cached mask
+                const maskCanvas = segmentationMasksRef.current.get(clip.id);
+                if (maskCanvas) {
+                  const tempCanvas = document.createElement('canvas');
+                  tempCanvas.width = offscreen.width;
+                  tempCanvas.height = offscreen.height;
+                  const tempCtx = tempCanvas.getContext('2d')!;
+                  tempCtx.drawImage(offscreen, 0, 0);
+
+                  if (mode === 'blur') {
+                    offCtx.save();
+                    const radius = clip.aiBackgroundRemoval.blurRadius || 10;
+                    offCtx.filter = `blur(${radius}px)`;
+                    offCtx.drawImage(tempCanvas, 0, 0);
+                    offCtx.restore();
+                  } else {
+                    offCtx.clearRect(0, 0, offscreen.width, offscreen.height);
                   }
-                  offCtx.putImageData(imgData, 0, 0);
+
+                  const personCanvas = document.createElement('canvas');
+                  personCanvas.width = offscreen.width;
+                  personCanvas.height = offscreen.height;
+                  const personCtx = personCanvas.getContext('2d')!;
+                  personCtx.drawImage(tempCanvas, 0, 0);
+
+                  personCtx.globalCompositeOperation = 'destination-in';
+                  personCtx.drawImage(maskCanvas, 0, 0, offscreen.width, offscreen.height);
+                  personCtx.globalCompositeOperation = 'source-over';
+
+                  offCtx.drawImage(personCanvas, 0, 0);
+                } else {
+                  // Fallback: Radial gradient mask until segmentation is loaded
+                  const faceX = smoothedRefX.current[clip.id] !== undefined ? smoothedRefX.current[clip.id] : 0.5;
+                  const tempCanvas = document.createElement('canvas');
+                  tempCanvas.width = offscreen.width;
+                  tempCanvas.height = offscreen.height;
+                  const tempCtx = tempCanvas.getContext('2d')!;
+                  tempCtx.drawImage(offscreen, 0, 0);
+
+                  if (mode === 'blur') {
+                    offCtx.save();
+                    const radius = clip.aiBackgroundRemoval.blurRadius || 10;
+                    offCtx.filter = `blur(${radius}px)`;
+                    offCtx.drawImage(tempCanvas, 0, 0);
+                    offCtx.restore();
+                  } else {
+                    offCtx.clearRect(0, 0, offscreen.width, offscreen.height);
+                  }
+
+                  tempCtx.save();
+                  tempCtx.globalCompositeOperation = 'destination-in';
+                  const grad = tempCtx.createRadialGradient(
+                    faceX * offscreen.width, offscreen.height * 0.45, offscreen.height * 0.15,
+                    faceX * offscreen.width, offscreen.height * 0.5, offscreen.height * 0.5
+                  );
+                  grad.addColorStop(0, 'rgba(0,0,0,1)');
+                  grad.addColorStop(0.65, 'rgba(0,0,0,0.85)');
+                  grad.addColorStop(1, 'rgba(0,0,0,0)');
+                  tempCtx.fillStyle = grad;
+                  tempCtx.fillRect(0, 0, offscreen.width, offscreen.height);
+                  tempCtx.restore();
+
+                  offCtx.drawImage(tempCanvas, 0, 0);
                 }
               }
 
+              // Collapsed Single-Pass Pixel Pipeline (Chroma Key, HSL, LUT, LGG)
+              const hasChromaKey = clip.chromaKey && clip.chromaKey.enabled;
+              const hasHsl = clip.hslAdjustments && (clip.hslAdjustments.hue !== 0 || clip.hslAdjustments.saturation !== 0 || clip.hslAdjustments.lightness !== 0);
+              
               let lutEntry: Lut3D | null = null;
               const lutText = clip.colorCorrection?.lutContent;
               if (lutText) {
@@ -980,49 +1132,143 @@ export default function VideoPreview() {
                              gamma.r !== 0 || gamma.g !== 0 || gamma.b !== 0 ||
                              gain.r !== 0 || gain.g !== 0 || gain.b !== 0;
 
-              if (lutEntry || hasLGG) {
-                const imgData = offCtx.getImageData(0, 0, offscreen.width, offscreen.height);
-                const data = imgData.data;
+              const needPixelPipeline = hasChromaKey || hasHsl || lutEntry || hasLGG;
 
-                for (let i = 0; i < data.length; i += 4) {
-                  if (data[i+3] === 0) continue;
+              if (needPixelPipeline) {
+                const success = webglPipeline.process(
+                  offscreen,
+                  {
+                    chromaKey: clip.chromaKey,
+                    hslAdjustments: clip.hslAdjustments,
+                    lutEntry,
+                    lutText,
+                    colorCorrection: clip.colorCorrection
+                  },
+                  offCtx
+                );
 
-                  let r = data[i] / 255;
-                  let g = data[i+1] / 255;
-                  let b = data[i+2] / 255;
+                if (!success) {
+                  const imgData = offCtx.getImageData(0, 0, offscreen.width, offscreen.height);
+                  const data = imgData.data;
 
-                  if (lutEntry) {
-                    const result = applyLut3D(r, g, b, lutEntry.table, lutEntry.size);
-                    r = result.r;
-                    g = result.g;
-                    b = result.b;
+                  // Precompute chroma key targets
+                  const targetHex = clip.chromaKey?.color || '#00ff00';
+                  const rTarget = parseInt(targetHex.slice(1, 3), 16);
+                  const gTarget = parseInt(targetHex.slice(3, 5), 16);
+                  const bTarget = parseInt(targetHex.slice(5, 7), 16);
+                  const tolerance = clip.chromaKey?.tolerance || 30;
+                  const feather = clip.chromaKey?.feather || 10;
+
+                  // Precompute HSL shift targets
+                  const hShift = clip.hslAdjustments?.hue || 0;
+                  const sShift = clip.hslAdjustments?.saturation || 0;
+                  const lShift = clip.hslAdjustments?.lightness || 0;
+
+                  for (let i = 0; i < data.length; i += 4) {
+                    let a = data[i+3];
+                    if (a === 0) continue;
+
+                    let r = data[i];
+                    let g = data[i+1];
+                    let b = data[i+2];
+
+                    // 1. Chroma Key
+                    if (hasChromaKey) {
+                      const dist = Math.sqrt((r - rTarget)**2 + (g - gTarget)**2 + (b - bTarget)**2);
+                      if (dist < tolerance) {
+                        a = 0;
+                      } else if (dist < tolerance + feather) {
+                        const ratio = (dist - tolerance) / feather;
+                        a = Math.min(a, ratio * 255);
+                      }
+                      if (a === 0) {
+                        data[i+3] = 0;
+                        continue;
+                      }
+                    }
+
+                    let rNorm = r / 255;
+                    let gNorm = g / 255;
+                    let bNorm = b / 255;
+
+                    // 2. HSL Adjustments
+                    if (hasHsl) {
+                      const max = Math.max(rNorm, gNorm, bNorm);
+                      const min = Math.min(rNorm, gNorm, bNorm);
+                      let h = 0, s = 0, l = (max + min) / 2;
+
+                      if (max !== min) {
+                        const d = max - min;
+                        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+                        switch (max) {
+                          case rNorm: h = (gNorm - bNorm) / d + (gNorm < bNorm ? 6 : 0); break;
+                          case gNorm: h = (bNorm - rNorm) / d + 2; break;
+                          case bNorm: h = (rNorm - gNorm) / d + 4; break;
+                        }
+                        h /= 6;
+                      }
+
+                      h = (h * 360 + hShift + 360) % 360 / 360;
+                      s = Math.max(0, Math.min(1, s + sShift / 100));
+                      l = Math.max(0, Math.min(1, l + lShift / 100));
+
+                      let rNew = l, gNew = l, bNew = l;
+                      if (s !== 0) {
+                        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+                        const p = 2 * l - q;
+                        const hue2rgb = (t: number) => {
+                          if (t < 0) t += 1;
+                          if (t > 1) t -= 1;
+                          if (t < 1/6) return p + (q - p) * 6 * t;
+                          if (t < 1/2) return q;
+                          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                          return p;
+                        };
+                        rNew = hue2rgb(h + 1/3);
+                        gNew = hue2rgb(h);
+                        bNew = hue2rgb(h - 1/3);
+                      }
+                      rNorm = rNew;
+                      gNorm = gNew;
+                      bNorm = bNew;
+                    }
+
+                    // 3. LUT application
+                    if (lutEntry) {
+                      const result = applyLut3D(rNorm, gNorm, bNorm, lutEntry.table, lutEntry.size);
+                      rNorm = result.r;
+                      gNorm = result.g;
+                      bNorm = result.b;
+                    }
+
+                    // 4. LGG (Lift Gamma Gain)
+                    if (hasLGG) {
+                      // Shadows Lift
+                      rNorm = rNorm + (lift.r / 100) * (1.0 - rNorm);
+                      gNorm = gNorm + (lift.g / 100) * (1.0 - gNorm);
+                      bNorm = bNorm + (lift.b / 100) * (1.0 - bNorm);
+
+                      // Midtones Gamma
+                      const midR = Math.sin(rNorm * Math.PI) * (gamma.r / 100);
+                      const midG = Math.sin(gNorm * Math.PI) * (gamma.g / 100);
+                      const midB = Math.sin(bNorm * Math.PI) * (gamma.b / 100);
+                      rNorm = Math.max(0, Math.min(1, rNorm + midR));
+                      gNorm = Math.max(0, Math.min(1, gNorm + midG));
+                      bNorm = Math.max(0, Math.min(1, bNorm + midB));
+
+                      // Highlights Gain
+                      rNorm = rNorm * (1.0 + gain.r / 100);
+                      gNorm = gNorm * (1.0 + gain.g / 100);
+                      bNorm = bNorm * (1.0 + gain.b / 100);
+                    }
+
+                    data[i] = Math.round(Math.max(0, Math.min(1, rNorm)) * 255);
+                    data[i+1] = Math.round(Math.max(0, Math.min(1, gNorm)) * 255);
+                    data[i+2] = Math.round(Math.max(0, Math.min(1, bNorm)) * 255);
+                    data[i+3] = Math.round(a);
                   }
-
-                  if (hasLGG) {
-                    // Shadows Lift
-                    r = r + (lift.r / 100) * (1.0 - r);
-                    g = g + (lift.g / 100) * (1.0 - g);
-                    b = b + (lift.b / 100) * (1.0 - b);
-
-                    // Midtones Gamma
-                    const midR = Math.sin(r * Math.PI) * (gamma.r / 100);
-                    const midG = Math.sin(g * Math.PI) * (gamma.g / 100);
-                    const midB = Math.sin(b * Math.PI) * (gamma.b / 100);
-                    r = Math.max(0, Math.min(1, r + midR));
-                    g = Math.max(0, Math.min(1, g + midG));
-                    b = Math.max(0, Math.min(1, b + midB));
-
-                    // Highlights Gain
-                    r = r * (1.0 + gain.r / 100);
-                    g = g * (1.0 + gain.g / 100);
-                    b = b * (1.0 + gain.b / 100);
-                  }
-
-                  data[i] = Math.round(Math.max(0, Math.min(1, r)) * 255);
-                  data[i+1] = Math.round(Math.max(0, Math.min(1, g)) * 255);
-                  data[i+2] = Math.round(Math.max(0, Math.min(1, b)) * 255);
+                  offCtx.putImageData(imgData, 0, 0);
                 }
-                offCtx.putImageData(imgData, 0, 0);
               }
 
               ctx.drawImage(offscreen, -cx, -cy, canvas.width, canvas.height);
@@ -1060,14 +1306,18 @@ export default function VideoPreview() {
 
             ctx.restore(); // restore transform space
             ctx.globalCompositeOperation = 'source-over'; // restore blend mode
+            ctx.restore(); // restore the pass clip region
           }
+        }
         } else if (trackType === 'text' && clip.textSettings) {
           const settings = clip.textSettings;
           ctx.save();
           
           const scaleRatio = canvas.height / 360;
           const fontSize = settings.fontSize * scaleRatio;
-          ctx.font = `${fontSize}px ${settings.fontFamily || 'Inter'}`;
+          const weight = settings.fontWeight || 'normal';
+          const style = settings.fontStyle || 'normal';
+          ctx.font = `${style} normal ${weight} ${fontSize}px "${settings.fontFamily || 'Inter'}"`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
 
@@ -1463,10 +1713,15 @@ export default function VideoPreview() {
         mediaHeight = media.videoHeight || mediaHeight;
       }
     } else if (selectedClip.type === 'image') {
-      const img = selectedClip.assetId ? imageElementsRef.current.get(selectedClip.assetId) : null;
-      if (img && img instanceof HTMLImageElement) {
-        mediaWidth = img.naturalWidth || mediaWidth;
-        mediaHeight = img.naturalHeight || mediaHeight;
+      if (selectedClip.shapeSettings) {
+        mediaWidth = selectedClip.shapeSettings.width || 300;
+        mediaHeight = selectedClip.shapeSettings.height || 300;
+      } else {
+        const img = selectedClip.assetId ? imageElementsRef.current.get(selectedClip.assetId) : null;
+        if (img && img instanceof HTMLImageElement) {
+          mediaWidth = img.naturalWidth || mediaWidth;
+          mediaHeight = img.naturalHeight || mediaHeight;
+        }
       }
     }
 
@@ -1653,6 +1908,46 @@ export default function VideoPreview() {
             className={`w-full h-full object-contain ${selectedClipId ? 'cursor-move' : ''}`}
           />
 
+          {compareMode && (
+            <>
+              {/* Visual Divider Line */}
+              <div 
+                className="absolute top-0 bottom-0 w-[2.5px] bg-white cursor-ew-resize z-45 group flex items-center justify-center shadow-[0_0_12px_rgba(255,255,255,0.8)]"
+                style={{ left: `${splitRatio * 100}%` }}
+                onMouseDown={(mouseDownEvent) => {
+                  mouseDownEvent.preventDefault();
+                  const containerElement = mouseDownEvent.currentTarget.parentElement!;
+                  const handleMouseMove = (moveEvent: MouseEvent) => {
+                    const rect = containerElement.getBoundingClientRect();
+                    const relativeX = moveEvent.clientX - rect.left;
+                    const newRatio = Math.max(0.01, Math.min(0.99, relativeX / rect.width));
+                    setSplitRatio(newRatio);
+                  };
+                  const handleMouseUp = () => {
+                    window.removeEventListener('mousemove', handleMouseMove);
+                    window.removeEventListener('mouseup', handleMouseUp);
+                  };
+                  window.addEventListener('mousemove', handleMouseMove);
+                  window.addEventListener('mouseup', handleMouseUp);
+                }}
+              >
+                {/* Drag Handle Tab */}
+                <div className="w-6 h-10 rounded-full bg-white border border-zinc-200 shadow-2xl flex flex-col gap-0.5 items-center justify-center pointer-events-none hover:scale-110 transition-transform">
+                  <div className="w-[1.5px] h-3 bg-zinc-400 rounded-full" />
+                  <div className="w-[1.5px] h-3 bg-zinc-400 rounded-full" />
+                </div>
+              </div>
+
+              {/* Labels */}
+              <div className="absolute top-3 left-3 px-2 py-0.5 rounded bg-black/70 backdrop-blur border border-white/10 text-[9px] font-mono font-bold text-white select-none pointer-events-none z-45 shadow">
+                Original
+              </div>
+              <div className="absolute top-3 right-3 px-2 py-0.5 rounded bg-violet-600/85 backdrop-blur border border-violet-500/20 text-[9px] font-mono font-bold text-white select-none pointer-events-none z-45 shadow">
+                Enhanced
+              </div>
+            </>
+          )}
+
           {/* Interactive Bounding Box Overlay */}
           {showOverlay && (
             <div 
@@ -1762,6 +2057,8 @@ export default function VideoPreview() {
         upscaleEnabled={upscaleEnabled}
         showSafeZone={showSafeZone}
         setShowSafeZone={setShowSafeZone}
+        compareMode={compareMode}
+        setCompareMode={setCompareMode}
         scrubberRef={scrubberRef}
         mobileTimecodeRef={mobileTimecodeRef}
         desktopTimecodeRef={desktopTimecodeRef}

@@ -9,12 +9,13 @@ interface TextTabProps {
 
 export default function TextTab({ selectedClip, handleTextSettingsChange }: TextTabProps) {
   const settings = selectedClip.textSettings;
-  if (!settings) return null;
 
   // Local helper states to toggle groups
-  const [enableOutline, setEnableOutline] = useState(settings.strokeWidth !== undefined && settings.strokeWidth > 0);
-  const [enableShadow, setEnableShadow] = useState(!!settings.shadowColor);
-  const [enableBackground, setEnableBackground] = useState(!!settings.backgroundColor);
+  const [enableOutline, setEnableOutline] = useState(settings ? (settings.strokeWidth !== undefined && settings.strokeWidth > 0) : false);
+  const [enableShadow, setEnableShadow] = useState(settings ? !!settings.shadowColor : false);
+  const [enableBackground, setEnableBackground] = useState(settings ? !!settings.backgroundColor : false);
+
+  if (!settings) return null;
 
   const handleOutlineToggle = (checked: boolean) => {
     setEnableOutline(checked);
@@ -78,11 +79,17 @@ export default function TextTab({ selectedClip, handleTextSettingsChange }: Text
               className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-violet-500 focus:outline-none transition"
             >
               <option value="Inter">Inter (Sans)</option>
-              <option value="Impact">Impact (Bold)</option>
-              <option value="Courier New">Courier (Mono)</option>
+              <option value="Montserrat">Montserrat (Montserrat Bold)</option>
+              <option value="Bebas Neue">Bebas Neue (Cinematic Header)</option>
+              <option value="Outfit">Outfit (Modern Geometric)</option>
+              <option value="Playfair Display">Playfair Display (Elegant Serif)</option>
+              <option value="Cinzel">Cinzel (Luxurious Roman)</option>
+              <option value="Syne">Syne (Artistic Display)</option>
+              <option value="Space Grotesk">Space Grotesk (Tech/Modern)</option>
+              <option value="Satisfy">Satisfy (Handwritten Script)</option>
+              <option value="Impact">Impact (Retro Bold)</option>
+              <option value="Courier New">Courier (Typewriter)</option>
               <option value="Georgia">Georgia (Serif)</option>
-              <option value="Arial">Arial</option>
-              <option value="Times New Roman">Times Roman</option>
             </select>
           </div>
 
@@ -101,6 +108,35 @@ export default function TextTab({ selectedClip, handleTextSettingsChange }: Text
                 onChange={(e) => handleTextSettingsChange('color', e.target.value)}
                 className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1 text-[10px] text-zinc-100 focus:border-violet-500 focus:outline-none font-mono"
               />
+            </div>
+          </div>
+
+          <div className="space-y-1 col-span-2">
+            <label className="block text-[9px] font-semibold text-zinc-500 uppercase">Font Styling</label>
+            <div className="flex gap-2">
+              {/* Bold Toggle */}
+              <button
+                onClick={() => {
+                  const isBold = settings.fontWeight === 'bold' || settings.fontWeight === '900';
+                  handleTextSettingsChange('fontWeight', isBold ? 'normal' : 'bold');
+                }}
+                className={`flex-1 py-1 px-2 rounded border text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${settings.fontWeight === 'bold' || settings.fontWeight === '900' ? 'bg-zinc-800 text-sky-400 border-sky-500/50' : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200'}`}
+              >
+                <span>B</span>
+                <span className="text-[9px] font-semibold text-zinc-500">Bold</span>
+              </button>
+
+              {/* Italic Toggle */}
+              <button
+                onClick={() => {
+                  const isItalic = settings.fontStyle === 'italic';
+                  handleTextSettingsChange('fontStyle', isItalic ? 'normal' : 'italic');
+                }}
+                className={`flex-1 py-1 px-2 rounded border text-xs italic transition flex items-center justify-center gap-1.5 cursor-pointer ${settings.fontStyle === 'italic' ? 'bg-zinc-800 text-sky-400 border-sky-500/50' : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200'}`}
+              >
+                <span>I</span>
+                <span className="text-[9px] font-semibold text-zinc-500 not-italic">Italic</span>
+              </button>
             </div>
           </div>
         </div>

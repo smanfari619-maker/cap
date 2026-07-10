@@ -5,7 +5,7 @@ import {
   Smartphone, Tv, Sparkles, Search, HardDrive, Cpu, 
   Keyboard, Clock, ShieldCheck, Settings, HelpCircle, 
   Bell, User, Scissors, MoreVertical, X, Share2, Link, Check,
-  ChevronDown, ChevronRight, ChevronLeft
+  ChevronDown, ChevronRight, ChevronLeft, Volume2
 } from 'lucide-react';
 import { db, type Project } from '../../lib/db';
 import { useEditorStore } from '../../store/editorStore';
@@ -14,6 +14,8 @@ import jellycutLogo from '../../assets/jellycut_logo.svg';
 import WatermarkRemoverTool from './WatermarkRemoverTool';
 import LipSyncTool from './LipSyncTool';
 import StoryCutterTool from './StoryCutterTool';
+import BackgroundRemoverTool from './BackgroundRemoverTool';
+import AudioDenoiserTool from './AudioDenoiserTool';
 import { BUILTIN_TEMPLATES, applyTemplate } from '../../lib/template-engine';
 import { downloadProjectBackup, generateShareLink } from '../../lib/cloud-sync';
 
@@ -840,6 +842,56 @@ export default function Dashboard() {
             )}
           />
 
+          {/* AI Background Remover */}
+          <BackgroundRemoverTool
+            renderTrigger={(open) => (
+              <div 
+                onClick={open}
+                className="premium-card p-6 flex flex-col justify-between h-[200px] cursor-pointer group"
+              >
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-violet-650/10 border border-violet-500/20 text-violet-400 flex items-center justify-center shrink-0">
+                    <Sparkles className="w-6 h-6 text-violet-400" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-zinc-200 group-hover:text-violet-400 transition-colors">AI Background Remover</h4>
+                    <p className="text-xs text-zinc-500 mt-1.5 leading-relaxed">
+                      Segment subjects and remove or replace backgrounds from video and image files locally with MediaPipe Selfie Segmentation.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex justify-end pt-4">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-violet-400 group-hover:text-violet-300 flex items-center gap-1">Open Tool &rarr;</span>
+                </div>
+              </div>
+            )}
+          />
+
+          {/* AI Audio Denoiser */}
+          <AudioDenoiserTool
+            renderTrigger={(open) => (
+              <div 
+                onClick={open}
+                className="premium-card p-6 flex flex-col justify-between h-[200px] cursor-pointer group"
+              >
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-emerald-600/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                    <Volume2 className="w-6 h-6 text-emerald-450" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-zinc-200 group-hover:text-emerald-450 transition-colors">AI Audio Denoiser</h4>
+                    <p className="text-xs text-zinc-500 mt-1.5 leading-relaxed">
+                      Clean background noises, static hums, fan rumbles, and hiss from your audio and video tracks locally in browser.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex justify-end pt-4">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 group-hover:text-emerald-300 flex items-center gap-1">Open Tool &rarr;</span>
+                </div>
+              </div>
+            )}
+          />
+
           {/* AI Avatar */}
           <LipSyncTool
             renderTrigger={(open) => (
@@ -920,6 +972,46 @@ export default function Dashboard() {
             )}
           />
 
+          <BackgroundRemoverTool
+            renderTrigger={(open) => (
+              <div 
+                onClick={open}
+                className="flex items-center justify-between p-3 rounded-xl border border-zinc-850 hover:border-zinc-800 bg-[#202024] hover:bg-zinc-900/60 cursor-pointer transition group"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-violet-650/10 border border-violet-500/20 text-violet-400 flex items-center justify-center shrink-0">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-[11px] text-zinc-200 leading-tight">BG Remover</h4>
+                    <span className="text-[9px] text-zinc-500">Erase background</span>
+                  </div>
+                </div>
+                <span className="text-zinc-550 text-xs font-semibold select-none group-hover:text-zinc-350">&gt;</span>
+              </div>
+            )}
+          />
+
+          <AudioDenoiserTool
+            renderTrigger={(open) => (
+              <div 
+                onClick={open}
+                className="flex items-center justify-between p-3 rounded-xl border border-zinc-850 hover:border-zinc-800 bg-[#202024] hover:bg-zinc-900/60 cursor-pointer transition group"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-600/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                    <Volume2 className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-[11px] text-zinc-200 leading-tight">Audio Denoiser</h4>
+                    <span className="text-[9px] text-zinc-500">Clean room noise</span>
+                  </div>
+                </div>
+                <span className="text-zinc-550 text-xs font-semibold select-none group-hover:text-zinc-350">&gt;</span>
+              </div>
+            )}
+          />
+
           <LipSyncTool
             renderTrigger={(open) => (
               <div 
@@ -927,7 +1019,7 @@ export default function Dashboard() {
                 className="flex items-center justify-between p-3 rounded-xl border border-zinc-855 hover:border-zinc-800 bg-[#202024] hover:bg-zinc-900/60 cursor-pointer transition group"
               >
                 <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-sky-650/10 border border-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
+                  <div className="w-8 h-8 rounded-lg bg-sky-655/10 border border-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
                     <Sparkles className="w-4 h-4" />
                   </div>
                   <div>

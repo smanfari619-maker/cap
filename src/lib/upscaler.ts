@@ -12,9 +12,6 @@ let glCanvas: HTMLCanvasElement | null = null;
 let gl: WebGLRenderingContext | null = null;
 let program: WebGLProgram | null = null;
 let texture: WebGLTexture | null = null;
-// Cached output canvas — allocated once and reused across frames to avoid
-// per-frame GC pressure during AI upscale export.
-let outCanvas: HTMLCanvasElement | null = null;
 
 // Vertex Shader: Pass coordinate data
 const vsSource = `
@@ -26,50 +23,74 @@ const vsSource = `
   }
 `;
 
-// Fragment Shader: Lanczos-3 Sinc-Windowed Reconstruction
+// Fragment Shader: High-Quality Bicubic Catmull-Rom with Contrast/Saturation Adjustments (4 bilinear lookups)
 const fsSource = `
   precision highp float;
   varying vec2 vTexCoord;
   uniform sampler2D uTexture;
   uniform vec2 uTexelSize;
+  uniform float uContrast;
+  uniform float uSaturation;
 
-  const float PI = 3.14159265359;
-
-  float sinc(float x) {
-    if (x == 0.0) return 1.0;
-    x = x * PI;
-    return sin(x) / x;
+  vec4 cubic(float v) {
+    vec4 n = vec4(1.0, 2.0, 3.0, 4.0) - v;
+    vec4 s = n * n * n;
+    float x = s.x;
+    float y = s.y - 4.0 * s.x;
+    float z = s.z - 4.0 * s.y + 6.0 * s.x;
+    float w = 6.0 - x - y - z;
+    return vec4(x, y, z, w) * (1.0/6.0);
   }
 
-  float lanczos(float x, float a) {
-    if (abs(x) >= a) return 0.0;
-    return sinc(x) * sinc(x / a);
+  vec4 textureBicubic(sampler2D tex, vec2 texCoords, vec2 texelSize) {
+    vec2 texSize = 1.0 / texelSize;
+    vec2 invTexSize = texelSize;
+
+    texCoords = texCoords * texSize - 0.5;
+
+    vec2 fxy = fract(texCoords);
+    texCoords -= fxy;
+
+    vec4 xcubic = cubic(fxy.x);
+    vec4 ycubic = cubic(fxy.y);
+
+    vec4 c = texCoords.xxyy + vec4(-0.5, 1.5, -0.5, 1.5);
+    
+    vec4 s = vec4(xcubic.xz + xcubic.yw, ycubic.xz + ycubic.yw);
+    vec4 offset = c + vec4(xcubic.yw, ycubic.yw) / s;
+
+    offset *= invTexSize.xxyy;
+
+    vec4 sample0 = texture2D(tex, offset.xz);
+    vec4 sample1 = texture2D(tex, offset.yz);
+    vec4 sample2 = texture2D(tex, offset.xw);
+    vec4 sample3 = texture2D(tex, offset.yw);
+
+    float sx = s.x / (s.x + s.y);
+    float sy = s.z / (s.z + s.w);
+
+    return mix(
+       mix(sample3, sample2, sx),
+       mix(sample1, sample0, sx),
+       sy
+    );
   }
 
   void main() {
-    vec2 pixelCoord = vTexCoord / uTexelSize - 0.5;
-    vec2 f = fract(pixelCoord);
-    vec2 base = floor(pixelCoord) + 0.5;
-
-    vec4 sum = vec4(0.0);
-    float totalWeight = 0.0;
-
-    // 6x6 sample grid for high-quality Lanczos-3 filtering
-    for (int y = -2; y <= 3; y++) {
-      float weightY = lanczos(float(y) - f.y, 3.0);
-      for (int x = -2; x <= 3; x++) {
-        float weightX = lanczos(float(x) - f.x, 3.0);
-        float weight = weightX * weightY;
-        
-        vec2 sampleCoord = (base + vec2(x, y)) * uTexelSize;
-        sampleCoord = clamp(sampleCoord, vec2(0.0), vec2(1.0));
-        
-        sum += texture2D(uTexture, sampleCoord) * weight;
-        totalWeight += weight;
-      }
+    vec4 color = textureBicubic(uTexture, vTexCoord, uTexelSize);
+    
+    // Apply contrast boost if set
+    if (uContrast != 1.0) {
+      color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
     }
-
-    gl_FragColor = clamp(sum / max(totalWeight, 0.0001), vec4(0.0), vec4(1.0));
+    
+    // Apply saturation boost if set
+    if (uSaturation != 1.0) {
+      float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+      color.rgb = mix(vec3(luma), color.rgb, uSaturation);
+    }
+    
+    gl_FragColor = clamp(color, vec4(0.0), vec4(1.0));
   }
 `;
 
@@ -94,7 +115,6 @@ export async function initUpscaler(
   onProgress?.('Compiling WebGL Super-Resolution Shaders…', 30);
 
   glCanvas = document.createElement('canvas');
-  // Initialize context with preserveDrawingBuffer to allow continuous readbacks
   gl = glCanvas.getContext('webgl', {
     antialias: false,
     depth: false,
@@ -155,7 +175,9 @@ export async function initUpscaler(
 export async function upscaleFrame(
   sourceCanvas: HTMLCanvasElement,
   targetWidth: number,
-  targetHeight: number
+  targetHeight: number,
+  contrast = 1.0,
+  saturation = 1.0
 ): Promise<HTMLCanvasElement> {
   if (!gl || !program || !glCanvas) {
     await initUpscaler();
@@ -175,26 +197,21 @@ export async function upscaleFrame(
   context.bindTexture(context.TEXTURE_2D, texture);
   context.texImage2D(context.TEXTURE_2D, 0, context.RGBA, context.RGBA, context.UNSIGNED_BYTE, sourceCanvas);
 
-  // Feed texel step size uniform
+  // Feed uniforms
   const uTexelSize = context.getUniformLocation(program!, 'uTexelSize');
   context.uniform2f(uTexelSize, 1.0 / sourceCanvas.width, 1.0 / sourceCanvas.height);
+
+  const uContrast = context.getUniformLocation(program!, 'uContrast');
+  context.uniform1f(uContrast, contrast);
+
+  const uSaturation = context.getUniformLocation(program!, 'uSaturation');
+  context.uniform1f(uSaturation, saturation);
 
   // Draw full-viewport quad through upscaler shader
   context.drawArrays(context.TRIANGLE_STRIP, 0, 4);
 
-  // Copy output to a 2D canvas to avoid WebGL context sharing side effects in WebCodecs/DOM.
-  // Reuse the cached module-level canvas, resizing only when the target dimensions change.
-  if (!outCanvas) {
-    outCanvas = document.createElement('canvas');
-  }
-  if (outCanvas.width !== targetWidth || outCanvas.height !== targetHeight) {
-    outCanvas.width = targetWidth;
-    outCanvas.height = targetHeight;
-  }
-  const outCtx = outCanvas.getContext('2d')!;
-  outCtx.drawImage(canvas, 0, 0);
-
-  return outCanvas;
+  // Directly return the WebGL canvas. VideoFrame copies from it synchronously.
+  return canvas;
 }
 
 export function isUpscalerReady(): boolean {

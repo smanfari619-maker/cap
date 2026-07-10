@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Play, Pause, SkipBack, SkipForward, ChevronDown, Check, Tv, Maximize2 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, ChevronDown, Check, Tv, Maximize2, Columns } from 'lucide-react';
 import { useEditorStore } from '../../../store/editorStore';
 import { db } from '../../../lib/db';
 
@@ -11,6 +11,8 @@ interface PlaybackControlsProps {
   upscaleEnabled: boolean;
   showSafeZone: boolean;
   setShowSafeZone: (show: boolean) => void;
+  compareMode: boolean;
+  setCompareMode: (show: boolean) => void;
   scrubberRef: React.RefObject<HTMLInputElement | null>;
   mobileTimecodeRef: React.RefObject<HTMLSpanElement | null>;
   desktopTimecodeRef: React.RefObject<HTMLSpanElement | null>;
@@ -27,6 +29,8 @@ export default function PlaybackControls({
   upscaleEnabled,
   showSafeZone,
   setShowSafeZone,
+  compareMode,
+  setCompareMode,
   scrubberRef,
   mobileTimecodeRef,
   desktopTimecodeRef,
@@ -304,6 +308,19 @@ export default function PlaybackControls({
               </div>
             )}
           </div>
+
+          {/* Before/After Compare Toggle */}
+          <button
+            onClick={() => setCompareMode(!compareMode)}
+            title={compareMode ? 'Disable Comparison Mode' : 'Enable Before/After Split Screen'}
+            className={`p-1 rounded border transition cursor-pointer ${
+              compareMode
+                ? 'bg-[#2a2a30] text-violet-400 border-violet-900/50'
+                : 'bg-[#121214] text-gray-400 border-[#2c2c32] hover:text-gray-200'
+            }`}
+          >
+            <Columns className="w-3 h-3" />
+          </button>
 
           {/* Safe Zone Toggle */}
           <button

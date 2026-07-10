@@ -1,4 +1,24 @@
 import { getFileFromOPFS } from './opfs';
+import { db } from './db';
+
+export async function getWaveformPeaksForAsset(assetId: string): Promise<number[]> {
+  try {
+    const asset = await db.assets.get(assetId);
+    if (!asset) return [];
+    if (asset.waveformPeaks && asset.waveformPeaks.length > 0) {
+      return asset.waveformPeaks;
+    }
+
+    const peaks = await generateWaveformPeaks(asset.opfsPath);
+    if (peaks.length > 0) {
+      await db.assets.update(assetId, { waveformPeaks: peaks });
+    }
+    return peaks;
+  } catch (err) {
+    console.warn('Failed to get/compute waveform peaks for asset:', assetId, err);
+    return [];
+  }
+}
 
 /**
  * Decodes the audio from an asset file in OPFS and extracts a fixed number of amplitude peaks.

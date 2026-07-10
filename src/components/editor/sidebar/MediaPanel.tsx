@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Upload, Plus, Loader2, Search, ImageIcon, LayoutGrid, List, ArrowUpDown, Filter, Check } from 'lucide-react';
+import { Upload, Plus, Loader2, Search, ImageIcon, LayoutGrid, List, ArrowUpDown, Filter, Check, AlertTriangle } from 'lucide-react';
 import { db, type Asset } from '../../../lib/db';
 import { useEditorStore } from '../../../store/editorStore';
 import { saveFileToOPFS, deleteFileFromOPFS, getFileFromOPFS } from '../../../lib/opfs';
@@ -31,6 +31,7 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
   const [filterType, setFilterType] = useState<'all' | 'video' | 'audio' | 'image'>('all');
   const [showSortDropdown, setShowSortDropdown] = useState(false);
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   // Fetch assets of the current project
   const assets = useLiveQuery(
@@ -777,32 +778,9 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
               Add to Timeline
             </button>
             <button
-              onClick={async () => {
+              onClick={() => {
                 if (selectedAssetIds.length > 0) {
-                  const confirmDelete = window.confirm(`Are you sure you want to delete the ${selectedAssetIds.length} selected asset(s) from your library? This will delete the raw files from disk and remove them from the timeline.`);
-                  if (confirmDelete) {
-                    for (const id of selectedAssetIds) {
-                      const asset = await db.assets.get(id);
-                      if (asset) {
-                        try {
-                          await deleteFileFromOPFS(asset.opfsPath);
-                        } catch (err) {
-                          console.warn('Failed to delete file from OPFS:', err);
-                        }
-                        const affectedTracks = project?.tracks.filter(track =>
-                          track.clips.some(clip => clip.assetId === id)
-                        ) || [];
-                        for (const tr of affectedTracks) {
-                          const clipsToRemove = tr.clips.filter(c => c.assetId === id);
-                          for (const cl of clipsToRemove) {
-                            await useEditorStore.getState().removeClip(cl.id);
-                          }
-                        }
-                        await db.assets.delete(id);
-                      }
-                    }
-                    setSelectedAssetIds([]);
-                  }
+                  setShowDeleteConfirm(true);
                 }
                 setContextMenu(null);
               }}
@@ -814,6 +792,62 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
           </div>
         )}
       </div>
+
+      {/* Custom Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-[#1e1e22] border border-[#2c2c32] rounded-xl shadow-2xl max-w-sm w-full p-5 flex flex-col gap-4 text-center items-center transform scale-100 transition-all border-[#ef4444]/15">
+            <div className="w-12 h-12 rounded-full bg-red-950/40 text-red-500 flex items-center justify-center border border-red-900/30">
+              <AlertTriangle className="w-6 h-6 animate-pulse" />
+            </div>
+            
+            <div className="flex flex-col gap-1.5">
+              <h3 className="text-sm font-bold text-gray-100">Delete {selectedAssetIds.length} Asset(s)?</h3>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Are you sure you want to delete the selected asset(s) from your library? This will delete the raw files from disk and remove them from the timeline.
+              </p>
+            </div>
+
+            <div className="flex gap-3.5 w-full mt-2 justify-center">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="flex-1 px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-750 text-xs font-semibold text-gray-300 hover:text-white transition cursor-pointer border border-zinc-700/50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setShowDeleteConfirm(false);
+                  for (const id of selectedAssetIds) {
+                    const asset = await db.assets.get(id);
+                    if (asset) {
+                      try {
+                        await deleteFileFromOPFS(asset.opfsPath);
+                      } catch (err) {
+                        console.warn('Failed to delete file from OPFS:', err);
+                      }
+                      const affectedTracks = project?.tracks.filter(track =>
+                        track.clips.some(clip => clip.assetId === id)
+                      ) || [];
+                      for (const tr of affectedTracks) {
+                        const clipsToRemove = tr.clips.filter(c => c.assetId === id);
+                        for (const cl of clipsToRemove) {
+                          await useEditorStore.getState().removeClip(cl.id);
+                        }
+                      }
+                      await db.assets.delete(id);
+                    }
+                  }
+                  setSelectedAssetIds([]);
+                }}
+                className="flex-1 px-4 py-2 rounded-lg bg-red-650 hover:bg-red-550 text-xs font-semibold text-white transition cursor-pointer shadow-lg shadow-red-950/20"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,6 +9,8 @@ import AddTrackPopover from './timeline/AddTrackPopover';
 import TimelineMarkerLane from './timeline/TimelineMarkerLane';
 import KeyframeGraphEditor from './timeline/KeyframeGraphEditor';
 import VoiceoverRecorder from './timeline/VoiceoverRecorder';
+import WaveformBar from './timeline/WaveformBar';
+import ClipFadeHandles from './timeline/ClipFadeHandles';
 
 const formatRulerTime = (ms: number) => {
   const totalSec = Math.floor(ms / 1000);
@@ -66,6 +68,29 @@ export default function Timeline({ height }: { height: number }) {
   const [showMicModal, setShowMicModal] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const snapLineRef = useRef<HTMLDivElement | null>(null);
+
+  const showSnapLine = (posMs: number, liveZoom: number) => {
+    if (!containerRef.current) return;
+    if (!snapLineRef.current) {
+      const snapLineEl = document.createElement('div');
+      snapLineEl.style.cssText = `
+        position: absolute; top: 0; bottom: 0; width: 1.5px; z-index: 100;
+        background: #00e5ff; box-shadow: 0 0 8px #00e5ff, 0 0 15px rgba(0, 229, 255, 0.6);
+        pointer-events: none; transition: left 0.05s;
+      `;
+      containerRef.current.appendChild(snapLineEl);
+      snapLineRef.current = snapLineEl;
+    }
+    snapLineRef.current.style.left = `${posMs * (liveZoom / 1000)}px`;
+  };
+
+  const hideSnapLine = () => {
+    if (snapLineRef.current) {
+      snapLineRef.current.remove();
+      snapLineRef.current = null;
+    }
+  };
   
   // Mobile touch gesture & double tap refs
   const touchStartDistRef = useRef<number | null>(null);
@@ -507,6 +532,103 @@ export default function Timeline({ height }: { height: number }) {
 
     if (!project) return;
 
+    const emoji = e.dataTransfer.getData('application/cap-emoji');
+    const shapeType = e.dataTransfer.getData('application/cap-shape');
+
+    if (emoji || shapeType) {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect || !containerRef.current) return;
+      const clientX = e.clientX - rect.left + containerRef.current.scrollLeft;
+      const dropTimeMs = Math.max(0, clientX / pxPerMs);
+      
+      const clipId = `clip-${Math.random().toString(36).substring(2, 9)}`;
+
+      if (emoji) {
+        let textTrack = project.tracks.find(t => t.type === 'text');
+        if (!textTrack) {
+          const newTrackId = Math.random().toString(36).substring(2, 9);
+          textTrack = {
+            id: newTrackId,
+            name: 'Text Track 1',
+            type: 'text' as const,
+            clips: [],
+            locked: false,
+            muted: false,
+            hidden: false
+          };
+          await updateTracks([...project.tracks, textTrack]);
+        }
+        
+        const newTextClip = {
+          id: clipId,
+          type: 'text' as const,
+          name: `Sticker (${emoji})`,
+          durationMs: 4000,
+          trimStartMs: 0,
+          trimEndMs: 4000,
+          positionMs: dropTimeMs,
+          trackId: textTrack.id,
+          textSettings: {
+            content: emoji,
+            color: '#ffffff',
+            fontSize: 48,
+            fontFamily: 'Inter',
+            x: 0.5,
+            y: 0.5,
+            scale: 1.0
+          }
+        };
+        await addClip(textTrack.id, newTextClip);
+      } else if (shapeType) {
+        let videoTrack = project.tracks.find(t => t.id === trackId) || project.tracks.find(t => t.type === 'video');
+        if (!videoTrack) {
+          const newTrackId = Math.random().toString(36).substring(2, 9);
+          videoTrack = {
+            id: newTrackId,
+            name: 'Video Track 1',
+            type: 'video' as const,
+            clips: [],
+            locked: false,
+            muted: false,
+            hidden: false
+          };
+          await updateTracks([...project.tracks, videoTrack]);
+        }
+        
+        const newShapeClip = {
+          id: clipId,
+          type: 'image' as const,
+          name: `Shape (${shapeType})`,
+          assetId: `shape_${shapeType}`,
+          durationMs: 4000,
+          trimStartMs: 0,
+          trimEndMs: 4000,
+          positionMs: dropTimeMs,
+          trackId: videoTrack.id,
+          shapeSettings: {
+            type: shapeType as any,
+            color: '#8b5cf6',
+            strokeColor: '#ffffff',
+            strokeWidth: 3,
+            width: 300,
+            height: 300
+          },
+          transform: {
+            scale: 40,
+            x: 0,
+            y: 0,
+            rotation: 0,
+            uniformScale: true,
+            blendMode: 'normal'
+          }
+        };
+        await addClip(videoTrack.id, newShapeClip);
+      }
+
+      setSelectedClipIds([clipId]);
+      return;
+    }
+
     const effectId = e.dataTransfer.getData('application/cap-effect-id');
     const filterId = e.dataTransfer.getData('application/cap-filter-id');
 
@@ -858,7 +980,41 @@ export default function Timeline({ height }: { height: number }) {
     const updateTimeFromX = (clientX: number) => {
       if (!containerRef.current) return;
       const clickX = clientX - rect.left + containerRef.current.scrollLeft;
-      const timeMs = Math.max(0, clickX / pxPerMs);
+      let timeMs = Math.max(0, clickX / pxPerMs);
+
+      let snapped = false;
+      if (snapEnabledRef.current) {
+        const SNAP_PX = 8;
+        const snapThresholdMs = SNAP_PX / pxPerMs;
+
+        // Collect all potential snap points (starts and ends of clips, plus markers)
+        const snapPoints: number[] = [0];
+        project.tracks.forEach(t => {
+          t.clips.forEach(c => {
+            snapPoints.push(c.positionMs);
+            snapPoints.push(c.positionMs + c.durationMs);
+          });
+        });
+        if (project.markers) {
+          project.markers.forEach(m => {
+            snapPoints.push(m.timeMs);
+          });
+        }
+
+        for (const pt of snapPoints) {
+          if (Math.abs(timeMs - pt) < snapThresholdMs) {
+            timeMs = pt;
+            showSnapLine(pt, useEditorStore.getState().zoom);
+            snapped = true;
+            break;
+          }
+        }
+      }
+
+      if (!snapped) {
+        hideSnapLine();
+      }
+
       setCurrentTime(timeMs);
     };
 
@@ -877,6 +1033,7 @@ export default function Timeline({ height }: { height: number }) {
     };
 
     const handleMouseUp = () => {
+      hideSnapLine();
       if (rafId) {
         window.cancelAnimationFrame(rafId);
       }
@@ -1251,26 +1408,7 @@ export default function Timeline({ height }: { height: number }) {
     const pendingNewTrack = { id: '', name: '', type: '' as TimelineTrack['type'] };
 
 
-    // Snap indicator line state (for visual feedback)
-    let snapLineEl: HTMLDivElement | null = null;
 
-    const showSnapLine = (posMs: number, liveZoom: number) => {
-      if (!containerRef.current) return;
-      if (!snapLineEl) {
-        snapLineEl = document.createElement('div');
-        snapLineEl.style.cssText = `
-          position: absolute; top: 0; bottom: 0; width: 1.5px; z-index: 100;
-          background: #00e5ff; box-shadow: 0 0 8px #00e5ff, 0 0 15px rgba(0, 229, 255, 0.6);
-          pointer-events: none; transition: left 0.05s;
-        `;
-        containerRef.current.appendChild(snapLineEl);
-      }
-      snapLineEl.style.left = `${posMs * (liveZoom / 1000)}px`;
-    };
-
-    const hideSnapLine = () => {
-      if (snapLineEl) { snapLineEl.remove(); snapLineEl = null; }
-    };
 
     const handleMouseMove = (moveEvent: PointerEvent) => {
       // Don't drag clips while the context menu is open
@@ -1881,18 +2019,47 @@ export default function Timeline({ height }: { height: number }) {
         {/* Playhead */}
         <div 
           ref={playheadRef}
-          className="absolute top-0 bottom-[-4000px] w-[1.5px] bg-red-500 pointer-events-none z-30 shadow-[0_0_6px_rgba(239,68,68,0.6)]"
-          style={{ left: useEditorStore.getState().currentTime * pxPerMs }}
+          className="absolute top-0 bottom-[-4000px] pointer-events-none z-30"
+          style={{ left: useEditorStore.getState().currentTime * pxPerMs, width: '1px' }}
         >
-          {/* Playhead cap */}
-          <div 
+          {/* Line — white, thin, no glow */}
+          <div className="absolute inset-0 w-px bg-white/90" />
+
+          {/* Timecode pill badge — centered on line */}
+          <div
             ref={playheadTextRef}
-            className="absolute -top-0 -left-[18px] min-w-[36px] h-[18px] px-1.5 rounded-sm bg-red-500 text-[8px] font-mono font-bold text-white flex items-center justify-center shadow"
+            className="absolute font-mono font-bold text-white flex items-center justify-center"
+            style={{
+              top: '-1px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              minWidth: '46px',
+              height: '18px',
+              padding: '0 6px',
+              fontSize: '9px',
+              borderRadius: '5px',
+              background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.5)',
+              letterSpacing: '0.04em',
+              whiteSpace: 'nowrap',
+            }}
           >
             {formatRulerTime(useEditorStore.getState().currentTime)}
           </div>
-          {/* Downward triangle */}
-          <div className="absolute top-[17px] -left-[3px] border-l-[3px] border-r-[3px] border-t-[4px] border-l-transparent border-r-transparent border-t-red-500" />
+
+          {/* Diamond tip */}
+          <div
+            className="absolute"
+            style={{
+              top: '17px',
+              left: '50%',
+              transform: 'translateX(-50%) rotate(45deg)',
+              width: '6px',
+              height: '6px',
+              background: '#8b5cf6',
+              borderRadius: '1px',
+            }}
+          />
         </div>
       </div>
     );
@@ -1987,6 +2154,31 @@ export default function Timeline({ height }: { height: number }) {
             className="p-1.5 md:p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition cursor-pointer"
           >
             <RotateCw className="w-4 h-4 md:w-3.5 md:h-3.5" />
+          </button>
+
+          {/* Enhance Video */}
+          <button 
+            onClick={async () => {
+              if (!selectedClipId || !selectedClip) { 
+                setTimelineToast("Select a video/image clip first to enhance!"); 
+                return; 
+              }
+              if (selectedClip.type !== 'video' && selectedClip.type !== 'image') {
+                setTimelineToast("Enhancement is only supported for video and image clips.");
+                return;
+              }
+              const isEnhanced = selectedClip.enhanceVideo || false;
+              await updateClip(selectedClipId, { enhanceVideo: !isEnhanced });
+              setTimelineToast(isEnhanced ? "Video Enhancement disabled" : "Video Enhancement enabled!");
+            }} 
+            title={selectedClip?.enhanceVideo ? 'Disable Video Enhancement' : 'Enhance Video (Auto Color & Detail Boost)'} 
+            className={`p-1.5 md:p-1 rounded transition cursor-pointer ${
+              selectedClip?.enhanceVideo 
+                ? 'bg-violet-900/40 text-violet-300 border border-violet-800/30' 
+                : 'hover:bg-zinc-800 text-zinc-500 hover:text-violet-400'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
 
           <span className="h-3 w-px bg-zinc-700/60 mx-1" />
@@ -2377,6 +2569,31 @@ export default function Timeline({ height }: { height: number }) {
                           <div
                             className="absolute top-0 bottom-0 w-px border-l border-dashed border-red-500 pointer-events-none z-30"
                             style={{ left: `${razorHoverX}px` }}
+                          />
+                        )}
+
+                        {/* Audio Waveform overlay */}
+                        {(clip.type === 'audio' || clip.type === 'video') && clip.assetId && (
+                          <WaveformBar
+                            assetId={clip.assetId}
+                            durationMs={clip.durationMs}
+                            trimStartMs={clip.trimStartMs}
+                            trimEndMs={clip.trimEndMs}
+                            color={clip.type === 'audio' ? 'rgba(34, 211, 238, 0.45)' : 'rgba(255, 255, 255, 0.25)'}
+                          />
+                        )}
+
+                        {/* Audio/Video Fade Handles */}
+                        {(clip.type === 'audio' || clip.type === 'video') && (
+                          <ClipFadeHandles
+                            clipId={clip.id}
+                            fadeInMs={clip.fadeInMs || 0}
+                            fadeOutMs={clip.fadeOutMs || 0}
+                            durationMs={clip.durationMs}
+                            pxPerMs={pxPerMs}
+                            width={width}
+                            height={trackHeight}
+                            updateClip={updateClip}
                           />
                         )}
 

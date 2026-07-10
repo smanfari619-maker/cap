@@ -48,3 +48,8 @@ backend/demo*.mp4
 backend/out*.mp4
 backend/test_*.mp4
 backend/test*.py
+
+# Local development temp files
+tmp_profile/
+tmp_watermark.ts
+

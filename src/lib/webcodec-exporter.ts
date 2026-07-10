@@ -242,18 +242,19 @@ export async function exportProjectWebCodecs(
 ): Promise<Blob> {
   const { width, height, fps, bitrate } = settings;
   let { upscaleMode } = settings;
-  let renderWidth = upscaleMode === 'ai' ? Math.round(width / 2) : width;
-  let renderHeight = upscaleMode === 'ai' ? Math.round(height / 2) : height;
+  const isUpscaling = upscaleMode === 'ai' || upscaleMode === 'enhanced';
+  let renderWidth = isUpscaling ? Math.round(width / 2) : width;
+  let renderHeight = isUpscaling ? Math.round(height / 2) : height;
 
-  if (upscaleMode === 'ai' && !isUpscalerReady()) {
+  if (isUpscaling && !isUpscalerReady()) {
     try {
       await initUpscaler(settings.onUpscaleProgress);
       settings.onUpscaleProgress?.('', 0);
     } catch (err) {
-      console.warn('[Exporter] AI Upscaler initialization failed, falling back to enhanced mode:', err);
-      upscaleMode = 'enhanced';
-      renderWidth = settings.width;
-      renderHeight = settings.height;
+      console.warn('[Exporter] WebGL Upscaler initialization failed, falling back to standard full-res mode:', err);
+      upscaleMode = 'standard';
+      renderWidth = width;
+      renderHeight = height;
     }
   }
   onProgress(5);
@@ -428,14 +429,6 @@ export async function exportProjectWebCodecs(
 
   let enhancedCanvas: HTMLCanvasElement | null = null;
   let enhancedCtx: CanvasRenderingContext2D | null = null;
-  if (upscaleMode === 'enhanced') {
-    enhancedCanvas = document.createElement('canvas');
-    enhancedCanvas.width = width;
-    enhancedCanvas.height = height;
-    enhancedCtx = enhancedCanvas.getContext('2d')!;
-    enhancedCtx.imageSmoothingEnabled = true;
-    enhancedCtx.imageSmoothingQuality = 'high';
-  }
 
   const cleanupOnExit = () => {
     try { if (videoEncoder.state !== 'closed') videoEncoder.close(); } catch { /* ignore */ }
@@ -601,13 +594,41 @@ export async function exportProjectWebCodecs(
           }
           if (clip.filterSettings && clip.filterSettings.type !== 'none') {
             const { type, intensity } = clip.filterSettings;
-            if (type === 'bw') filterString += `grayscale(${intensity}%) `;
-            else if (type === 'sepia') filterString += `sepia(${intensity}%) `;
-            else if (type === 'vintage') filterString += `sepia(${intensity * 0.4}%) hue-rotate(30deg) contrast(${100 - intensity * 0.2}%) `;
-            else if (type === 'warm') filterString += `sepia(${intensity * 0.3}%) saturate(${100 + intensity * 0.2}%) `;
-            else if (type === 'cool') filterString += `hue-rotate(190deg) saturate(${100 + intensity * 0.1}%) `;
-            else if (type === 'cyberpunk') filterString += `hue-rotate(300deg) contrast(1.1) saturate(${100 + intensity * 0.5}%) `;
-            else if (type === 'cinematic') filterString += `contrast(${100 + intensity * 0.2}%) saturate(${100 - intensity * 0.1}%) `;
+            if (type === 'sunset') {
+              filterString += `saturate(${100 + intensity * 0.4}%) brightness(${100 + intensity * 0.05}%) sepia(${intensity * 0.3}%) hue-rotate(${-intensity * 0.1}deg) contrast(${100 + intensity * 0.05}%) `;
+            } else if (type === 'nordic') {
+              filterString += `hue-rotate(${185 * intensity / 100}deg) saturate(${100 - intensity * 0.25}%) contrast(${100 + intensity * 0.1}%) brightness(${100 - intensity * 0.05}%) `;
+            } else if (type === 'neon') {
+              filterString += `hue-rotate(${280 * intensity / 100}deg) saturate(${100 + intensity * 0.4}%) contrast(${100 + intensity * 0.15}%) `;
+            } else if (type === 'emerald') {
+              filterString += `hue-rotate(${85 * intensity / 100}deg) saturate(${100 - intensity * 0.15}%) contrast(${100 - intensity * 0.05}%) sepia(${intensity * 0.2}%) `;
+            } else if (type === 'fade') {
+              filterString += `contrast(${100 - intensity * 0.25}%) saturate(${100 - intensity * 0.15}%) brightness(${100 + intensity * 0.1}%) sepia(${intensity * 0.1}%) `;
+            } else if (type === 'drama') {
+              filterString += `contrast(${100 + intensity * 0.35}%) saturate(${100 - intensity * 0.4}%) brightness(${100 - intensity * 0.1}%) `;
+            } else if (type === 'bw') {
+              filterString += `grayscale(${intensity}%) `;
+            } else if (type === 'sepia') {
+              filterString += `sepia(${intensity}%) `;
+            } else if (type === 'vintage') {
+              filterString += `sepia(${intensity * 0.4}%) hue-rotate(30deg) contrast(${100 - intensity * 0.2}%) `;
+            } else if (type === 'warm') {
+              filterString += `sepia(${intensity * 0.3}%) saturate(${100 + intensity * 0.2}%) `;
+            } else if (type === 'cool') {
+              filterString += `hue-rotate(190deg) saturate(${100 + intensity * 0.1}%) `;
+            } else if (type === 'cyberpunk') {
+              filterString += `hue-rotate(300deg) contrast(1.1) saturate(${100 + intensity * 0.5}%) `;
+            } else if (type === 'cinematic') {
+              filterString += `contrast(${100 + intensity * 0.2}%) saturate(${100 - intensity * 0.1}%) `;
+            } else if (type === 'pastel') {
+              filterString += `sepia(${intensity * 0.25}%) saturate(${100 + intensity * 0.3}%) hue-rotate(-15deg) contrast(${100 - intensity * 0.05}%) `;
+            } else if (type === 'forest') {
+              filterString += `hue-rotate(60deg) saturate(${100 + intensity * 0.1}%) contrast(${100 + intensity * 0.15}%) `;
+            } else if (type === 'polaroid') {
+              filterString += `contrast(${100 - intensity * 0.15}%) saturate(${100 - intensity * 0.15}%) sepia(${intensity * 0.15}%) brightness(${100 + intensity * 0.05}%) `;
+            } else if (type === 'vaporwave') {
+              filterString += `hue-rotate(270deg) saturate(${100 + intensity * 0.6}%) contrast(${100 + intensity * 0.1}%) `;
+            }
           }
           if (clip.videoEffects) {
             for (const eff of clip.videoEffects) {
@@ -694,6 +715,26 @@ export async function exportProjectWebCodecs(
                 dWidth = renderHeight * srcRatio;
                 dx = (renderWidth - dWidth) / 2;
               }
+            }
+
+            // Fill letterbox "dead space" areas by drawing a blurred background of the same color pixels
+            if (dx > 0 || dy > 0) {
+              let cWidth = renderWidth;
+              let cHeight = renderHeight;
+              let cX = 0;
+              let cY = 0;
+              if (srcRatio > destRatio) {
+                cWidth = renderHeight * srcRatio;
+                cX = (renderWidth - cWidth) / 2;
+              } else {
+                cHeight = renderWidth / srcRatio;
+                cY = (renderHeight - cHeight) / 2;
+              }
+              offCtx.save();
+              offCtx.filter = 'blur(40px) brightness(0.65)';
+              offCtx.drawImage(drawSource, cX, cY, cWidth, cHeight);
+              offCtx.restore();
+              offCtx.filter = filterString.trim() || 'none';
             }
 
             offCtx.drawImage(drawSource, dx, dy, dWidth, dHeight);
@@ -913,8 +954,9 @@ export async function exportProjectWebCodecs(
             frameToDraw.close();
           }
         } else if (type === 'image') {
+        const isShape = !!clip.shapeSettings;
         const img = clip.assetId ? imageElements.get(clip.assetId) : null;
-        if (img) {
+        if (img || isShape) {
           let opacity = 1.0;
           const offset = timeMs - clip.positionMs;
           const fadeIn = clip.fadeInMs || 0;
@@ -946,20 +988,92 @@ export async function exportProjectWebCodecs(
           if (tRotation !== 0) ctx.rotate((tRotation * Math.PI) / 180);
           if (tScale !== 1) ctx.scale(tScale, tScale);
 
-          const srcRatio = img.naturalWidth / (img.naturalHeight || 1);
-          const destRatio = renderWidth / renderHeight;
-          let dWidth = renderWidth;
-          let dHeight = renderHeight;
-          let dx = 0;
-          let dy = 0;
-          if (srcRatio > destRatio) {
-            dHeight = renderWidth / srcRatio;
-            dy = (renderHeight - dHeight) / 2;
-          } else {
-            dWidth = renderHeight * srcRatio;
-            dx = (renderWidth - dWidth) / 2;
+          if (isShape && clip.shapeSettings) {
+            ctx.fillStyle = clip.shapeSettings.color || '#3b82f6';
+            ctx.strokeStyle = clip.shapeSettings.strokeColor || '#ffffff';
+            ctx.lineWidth = clip.shapeSettings.strokeWidth !== undefined ? clip.shapeSettings.strokeWidth : 3;
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+
+            const width = clip.shapeSettings.width || 300;
+            const height = clip.shapeSettings.height || 300;
+            const shapeType = clip.shapeSettings.type;
+
+            const fillVal = clip.shapeSettings.color;
+            const strokeVal = clip.shapeSettings.strokeColor;
+            const hasFill = fillVal && fillVal !== 'transparent' && fillVal !== 'none';
+            const hasStroke = ctx.lineWidth > 0 && strokeVal && strokeVal !== 'transparent' && strokeVal !== 'none';
+
+            ctx.beginPath();
+            if (shapeType === 'circle') {
+              const rx = Math.max(2, width / 2 - ctx.lineWidth);
+              const ry = Math.max(2, height / 2 - ctx.lineWidth);
+              ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+            } else if (shapeType === 'rectangle') {
+              const strokeOffset = ctx.lineWidth;
+              ctx.rect(-width / 2 + strokeOffset, -height / 2 + strokeOffset, Math.max(1, width - strokeOffset * 2), Math.max(1, height - strokeOffset * 2));
+            } else if (shapeType === 'triangle') {
+              const strokeOffset = ctx.lineWidth;
+              ctx.moveTo(0, -height / 2 + strokeOffset);
+              ctx.lineTo(-width / 2 + strokeOffset, height / 2 - strokeOffset);
+              ctx.lineTo(width / 2 - strokeOffset, height / 2 - strokeOffset);
+              ctx.closePath();
+            } else if (shapeType === 'arrow') {
+              const length = width * 0.95;
+              const thickness = height * 0.3;
+              ctx.moveTo(-length / 2, -thickness / 2);
+              ctx.lineTo(length / 6, -thickness / 2);
+              ctx.lineTo(length / 6, -thickness);
+              ctx.lineTo(length / 2, 0);
+              ctx.lineTo(length / 6, thickness);
+              ctx.lineTo(length / 6, thickness / 2);
+              ctx.lineTo(-length / 2, thickness / 2);
+              ctx.closePath();
+            } else if (shapeType === 'star') {
+              const spikes = 5;
+              const rx = Math.max(2, width / 2 - ctx.lineWidth);
+              const ry = Math.max(2, height / 2 - ctx.lineWidth);
+              const rxInner = rx / 2;
+              const ryInner = ry / 2;
+              let rot = Math.PI / 2 * 3;
+              const step = Math.PI / spikes;
+              ctx.moveTo(0, -ry);
+              for (let i = 0; i < spikes; i++) {
+                let x = Math.cos(rot) * rx;
+                let y = Math.sin(rot) * ry;
+                ctx.lineTo(x, y);
+                rot += step;
+                x = Math.cos(rot) * rxInner;
+                y = Math.sin(rot) * ryInner;
+                ctx.lineTo(x, y);
+                rot += step;
+              }
+              ctx.lineTo(0, -ry);
+              ctx.closePath();
+            }
+
+            if (hasFill) {
+              ctx.fill();
+            }
+            if (hasStroke) {
+              ctx.stroke();
+            }
+          } else if (img) {
+            const srcRatio = img.naturalWidth / (img.naturalHeight || 1);
+            const destRatio = renderWidth / renderHeight;
+            let dWidth = renderWidth;
+            let dHeight = renderHeight;
+            let dx = 0;
+            let dy = 0;
+            if (srcRatio > destRatio) {
+              dHeight = renderWidth / srcRatio;
+              dy = (renderHeight - dHeight) / 2;
+            } else {
+              dWidth = renderHeight * srcRatio;
+              dx = (renderWidth - dWidth) / 2;
+            }
+            ctx.drawImage(img, dx - renderWidth / 2, dy - renderHeight / 2, dWidth, dHeight);
           }
-          ctx.drawImage(img, dx - renderWidth / 2, dy - renderHeight / 2, dWidth, dHeight);
           ctx.restore();
           ctx.globalCompositeOperation = 'source-over';
           ctx.restore();
@@ -974,7 +1088,9 @@ export async function exportProjectWebCodecs(
       
       const scaleRatio = renderHeight / 360;
       const fontSize = settings.fontSize * scaleRatio;
-      ctx.font = `${fontSize}px ${settings.fontFamily || 'Inter'}`;
+      const weight = settings.fontWeight || 'normal';
+      const style = settings.fontStyle || 'normal';
+      ctx.font = `${style} normal ${weight} ${fontSize}px "${settings.fontFamily || 'Inter'}"`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
@@ -1137,25 +1253,31 @@ export async function exportProjectWebCodecs(
 
     let frameSource: HTMLCanvasElement | OffscreenCanvas = canvas;
 
-    if (upscaleMode === 'ai' && isUpscalerReady()) {
+    if ((upscaleMode === 'ai' || upscaleMode === 'enhanced') && isUpscalerReady()) {
       try {
-        frameSource = await upscaleFrame(canvas as HTMLCanvasElement, width, height);
+        const contrast = upscaleMode === 'enhanced' ? 1.15 : 1.0;
+        const saturation = upscaleMode === 'enhanced' ? 1.15 : 1.0;
+        frameSource = await upscaleFrame(canvas as HTMLCanvasElement, width, height, contrast, saturation);
       } catch (err) {
-        console.warn('[Upscaler] Frame upscale failed, using original:', err);
+        console.warn('[Upscaler] Frame upscale failed, using canvas 2D fallback:', err);
         if (!enhancedCanvas) {
           enhancedCanvas = document.createElement('canvas');
           enhancedCanvas.width = width;
           enhancedCanvas.height = height;
           enhancedCtx = enhancedCanvas.getContext('2d')!;
+          enhancedCtx.imageSmoothingEnabled = true;
+          enhancedCtx.imageSmoothingQuality = 'high';
         }
+        if (upscaleMode === 'enhanced') {
+          enhancedCtx!.filter = 'contrast(1.15) saturate(1.15) brightness(1.02)';
+        } else {
+          enhancedCtx!.filter = 'none';
+        }
+        enhancedCtx!.clearRect(0, 0, width, height);
         enhancedCtx!.drawImage(canvas, 0, 0, width, height);
+        enhancedCtx!.filter = 'none';
         frameSource = enhancedCanvas;
       }
-    } else if (upscaleMode === 'enhanced' && enhancedCanvas && enhancedCtx) {
-      enhancedCtx.filter = 'contrast(1.04) saturate(1.03)';
-      enhancedCtx.drawImage(canvas, 0, 0, width, height);
-      enhancedCtx.filter = 'none';
-      frameSource = enhancedCanvas;
     }
 
     const frame = new VideoFrame(frameSource as CanvasImageSource, { timestamp: (f * 1000000) / fps });
@@ -1169,7 +1291,9 @@ export async function exportProjectWebCodecs(
     const frameProgress = 15 + Math.round((f / totalFrames) * 70);
     onProgress(frameProgress);
 
-    if (f % 10 === 0) {
+    // Yield to the browser event loop less frequently (once per 60 frames / 2 seconds of video)
+    // to allow GPU pipelines to run uninterrupted and maximize frame encoding speed.
+    if (f % 60 === 0) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }

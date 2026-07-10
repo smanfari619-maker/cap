@@ -46,6 +46,7 @@ export default function VideoTab({
   setIsDrawModalOpen
 }: VideoTabProps) {
   const [isAnalyzingScenes, setIsAnalyzingScenes] = useState(false);
+  const [sceneAnalysisProgress, setSceneAnalysisProgress] = useState<number | null>(null);
 
   const formatTime = (ms: number) => {
     const sec = (ms / 1000).toFixed(2);
@@ -525,8 +526,11 @@ export default function VideoTab({
               disabled={isAnalyzingScenes}
               onClick={async () => {
                 setIsAnalyzingScenes(true);
+                setSceneAnalysisProgress(0);
                 try {
-                  const splitCount = await autoCutVideoClip(selectedClip.id);
+                  const splitCount = await autoCutVideoClip(selectedClip.id, (progress) => {
+                    setSceneAnalysisProgress(progress);
+                  });
                   if (splitCount > 0) {
                     alert(`Successfully detected and split this clip into ${splitCount + 1} scenes!`);
                   } else {
@@ -537,6 +541,7 @@ export default function VideoTab({
                   alert(e.message || "Failed to analyze scene cuts.");
                 } finally {
                   setIsAnalyzingScenes(false);
+                  setSceneAnalysisProgress(null);
                 }
               }}
               className="w-full py-1.5 bg-sky-600 hover:bg-sky-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-semibold rounded text-[10px] transition flex items-center justify-center gap-1 cursor-pointer"
@@ -544,7 +549,7 @@ export default function VideoTab({
               {isAnalyzingScenes ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Analyzing scenes...
+                  Analyzing scenes {sceneAnalysisProgress !== null ? `(${sceneAnalysisProgress}%)` : ''}...
                 </>
               ) : (
                 <>
