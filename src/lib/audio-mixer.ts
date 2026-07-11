@@ -7,8 +7,12 @@ export async function mixAudioTracks(project: Project, sampleRate = 44100): Prom
   const audioVideoClips: { clip: TimelineClip; type: 'video' | 'audio' }[] = [];
 
   for (const track of project.tracks) {
+    // Skip muted tracks
+    if (track.muted) continue;
     if (track.type === 'video' || track.type === 'audio') {
       for (const clip of track.clips) {
+        // Skip disabled clips or clips with volume set to 0
+        if (clip.disabled || clip.volume === 0) continue;
         if (clip.assetId && clip.type !== 'image') {
           audioVideoClips.push({ clip, type: track.type === 'audio' ? 'audio' : 'video' });
           const endMs = clip.positionMs + clip.durationMs;
@@ -41,6 +45,13 @@ export async function mixAudioTracks(project: Project, sampleRate = 44100): Prom
         if (!asset) continue;
 
         const file = await getFileFromOPFS(asset.opfsPath);
+        
+        // Safety check for massive video files to prevent memory/decoding crashes
+        if (file.size > 100 * 1024 * 1024 && file.type.startsWith('video/')) {
+          console.warn(`[AudioMixer] Skipping audio track for massive video file ${file.name} (${(file.size / 1024 / 1024).toFixed(1)}MB) to prevent crash.`);
+          continue;
+        }
+
         const arrayBuffer = await file.arrayBuffer();
 
         // Decode audio data inside standard context (OfflineAudioContext might not support decoding directly on some engines)

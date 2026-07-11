@@ -31,63 +31,66 @@ const fsSource = `
   uniform vec2 uTexelSize;
   uniform float uContrast;
   uniform float uSaturation;
+  uniform float uSharpen;
+  uniform float uSeed;
 
-  vec4 cubic(float v) {
-    vec4 n = vec4(1.0, 2.0, 3.0, 4.0) - v;
-    vec4 s = n * n * n;
-    float x = s.x;
-    float y = s.y - 4.0 * s.x;
-    float z = s.z - 4.0 * s.y + 6.0 * s.x;
-    float w = 6.0 - x - y - z;
-    return vec4(x, y, z, w) * (1.0/6.0);
+  float getLuma(vec3 color) {
+    return dot(color, vec3(0.299, 0.587, 0.114));
   }
 
-  vec4 textureBicubic(sampler2D tex, vec2 texCoords, vec2 texelSize) {
-    vec2 texSize = 1.0 / texelSize;
-    vec2 invTexSize = texelSize;
+  float random(vec2 st) {
+    return fract(sin(dot(st.xy + uSeed, vec2(12.9898,78.233))) * 43758.5453123);
+  }
 
-    texCoords = texCoords * texSize - 0.5;
+  vec4 applyCAS(sampler2D tex, vec2 uv, vec2 texelSize, float sharpness) {
+    if (sharpness <= 0.0) return texture2D(tex, uv);
 
-    vec2 fxy = fract(texCoords);
-    texCoords -= fxy;
+    vec3 b = texture2D(tex, uv + vec2(0.0, -texelSize.y)).rgb;
+    vec3 d = texture2D(tex, uv + vec2(-texelSize.x, 0.0)).rgb;
+    vec3 e = texture2D(tex, uv).rgb;
+    vec3 f = texture2D(tex, uv + vec2(texelSize.x, 0.0)).rgb;
+    vec3 h = texture2D(tex, uv + vec2(0.0, texelSize.y)).rgb;
 
-    vec4 xcubic = cubic(fxy.x);
-    vec4 ycubic = cubic(fxy.y);
+    float lb = getLuma(b);
+    float ld = getLuma(d);
+    float le = getLuma(e);
+    float lf = getLuma(f);
+    float lh = getLuma(h);
 
-    vec4 c = texCoords.xxyy + vec4(-0.5, 1.5, -0.5, 1.5);
+    float minLuma = min(min(min(lb, ld), min(le, lf)), lh);
+    float maxLuma = max(max(max(lb, ld), max(le, lf)), lh);
+
+    // AMD FidelityFX CAS Luma Weighting
+    float peak = mix(-0.125, -0.2, clamp(sharpness, 0.0, 1.0));
+    float wAmp = clamp(min(minLuma, 1.0 - maxLuma) / max(maxLuma, 0.0001), 0.0, 1.0);
+    float w = wAmp * peak;
+    float rcpWeight = 1.0 / (1.0 + 4.0 * w);
     
-    vec4 s = vec4(xcubic.xz + xcubic.yw, ycubic.xz + ycubic.yw);
-    vec4 offset = c + vec4(xcubic.yw, ycubic.yw) / s;
-
-    offset *= invTexSize.xxyy;
-
-    vec4 sample0 = texture2D(tex, offset.xz);
-    vec4 sample1 = texture2D(tex, offset.yz);
-    vec4 sample2 = texture2D(tex, offset.xw);
-    vec4 sample3 = texture2D(tex, offset.yw);
-
-    float sx = s.x / (s.x + s.y);
-    float sy = s.z / (s.z + s.w);
-
-    return mix(
-       mix(sample3, sample2, sx),
-       mix(sample1, sample0, sx),
-       sy
-    );
+    vec3 res = clamp((b * w + d * w + f * w + h * w + e) * rcpWeight, 0.0, 1.0);
+    
+    return vec4(res, texture2D(tex, uv).a);
   }
 
   void main() {
-    vec4 color = textureBicubic(uTexture, vTexCoord, uTexelSize);
+    vec4 color = applyCAS(uTexture, vTexCoord, uTexelSize, uSharpen);
     
-    // Apply contrast boost if set
+    // Apply contrast boost if set (Luminance ratio method to protect colors)
     if (uContrast != 1.0) {
-      color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
+      float luma = getLuma(color.rgb);
+      float lumaContrast = clamp((luma - 0.5) * uContrast + 0.5, 0.0, 1.0);
+      color.rgb = color.rgb * (lumaContrast / max(luma, 0.0001)); 
     }
     
     // Apply saturation boost if set
     if (uSaturation != 1.0) {
-      float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+      float luma = getLuma(color.rgb);
       color.rgb = mix(vec3(luma), color.rgb, uSaturation);
+    }
+    
+    // Micro-detail Dithering (subtle high-frequency grain to prevent banding and increase perceived texture)
+    if (uSharpen > 0.0) {
+      float noise = (random(vTexCoord) - 0.5) * (1.5 / 255.0);
+      color.rgb += noise;
     }
     
     gl_FragColor = clamp(color, vec4(0.0), vec4(1.0));
@@ -177,7 +180,8 @@ export async function upscaleFrame(
   targetWidth: number,
   targetHeight: number,
   contrast = 1.0,
-  saturation = 1.0
+  saturation = 1.0,
+  sharpen = 0.0
 ): Promise<HTMLCanvasElement> {
   if (!gl || !program || !glCanvas) {
     await initUpscaler();
@@ -206,6 +210,12 @@ export async function upscaleFrame(
 
   const uSaturation = context.getUniformLocation(program!, 'uSaturation');
   context.uniform1f(uSaturation, saturation);
+
+  const uSharpen = context.getUniformLocation(program!, 'uSharpen');
+  context.uniform1f(uSharpen, sharpen);
+
+  const uSeed = context.getUniformLocation(program!, 'uSeed');
+  context.uniform1f(uSeed, Math.random());
 
   // Draw full-viewport quad through upscaler shader
   context.drawArrays(context.TRIANGLE_STRIP, 0, 4);

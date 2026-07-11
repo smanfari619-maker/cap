@@ -192,29 +192,37 @@ class VideoDecoderReader {
         }
       }
 
-      // 2. Decode next sample if available
-      if (this.nextSampleIndex >= this.demuxed.samples.length) {
-        if (this.decoder.state === 'configured') {
-          await this.decoder.flush();
-        }
-        if (this.frameQueue.length === 0) return null;
-        continue;
+      // 2. Decode next sample(s) if available. Loop until a frame is produced.
+      while (this.frameQueue.length === 0 && this.nextSampleIndex < this.demuxed.samples.length) {
+        const sample = this.demuxed.samples[this.nextSampleIndex++];
+        const chunk = new EncodedVideoChunk({
+          type: sample.is_sync ? 'key' : 'delta',
+          timestamp: (sample.cts * 1_000_000) / sample.timescale,
+          duration: (sample.duration * 1_000_000) / sample.timescale,
+          data: sample.data
+        });
+        this.decoder.decode(chunk);
       }
 
-      const sample = this.demuxed.samples[this.nextSampleIndex++];
-      const chunk = new EncodedVideoChunk({
-        type: sample.is_sync ? 'key' : 'delta',
-        timestamp: (sample.cts * 1_000_000) / sample.timescale,
-        duration: (sample.duration * 1_000_000) / sample.timescale,
-        data: sample.data
-      });
-
-      this.decoder.decode(chunk);
-
+      // If we still have no frames in queue, wait for the decoder to output
       if (this.frameQueue.length === 0) {
+        if (this.nextSampleIndex >= this.demuxed.samples.length) {
+          if (this.decoder.state === 'configured') {
+            await this.decoder.flush();
+          }
+          if (this.frameQueue.length === 0) return null;
+          continue;
+        }
+
         await new Promise<void>((resolve, reject) => {
-          this.frameResolver = resolve;
-          setTimeout(() => reject(new Error('Video decoder read timeout')), 1000);
+          const timeoutId = setTimeout(() => {
+            this.frameResolver = null;
+            reject(new Error('Video decoder read timeout'));
+          }, 5000); // 5 seconds timeout
+          this.frameResolver = () => {
+            clearTimeout(timeoutId);
+            resolve();
+          };
         }).catch((err) => {
           throw err;
         });
@@ -491,8 +499,15 @@ export async function exportProjectWebCodecs(
           const fallbackVideo = clip.assetId ? videoElements.get(clip.assetId) : null;
           if (!frameToDraw && fallbackVideo) {
             fallbackVideo.currentTime = sourceTime;
-            await new Promise((resolve) => {
-              fallbackVideo.onseeked = resolve;
+            await new Promise<void>((resolve) => {
+              let resolved = false;
+              const onSeeked = () => {
+                if (resolved) return;
+                resolved = true;
+                resolve();
+              };
+              fallbackVideo.onseeked = onSeeked;
+              setTimeout(onSeeked, 500); // safety timeout
             });
           }
 
@@ -1257,7 +1272,8 @@ export async function exportProjectWebCodecs(
       try {
         const contrast = upscaleMode === 'enhanced' ? 1.15 : 1.0;
         const saturation = upscaleMode === 'enhanced' ? 1.15 : 1.0;
-        frameSource = await upscaleFrame(canvas as HTMLCanvasElement, width, height, contrast, saturation);
+        const sharpen = upscaleMode === 'enhanced' ? 0.25 : (upscaleMode === 'ai' ? 0.15 : 0.0);
+        frameSource = await upscaleFrame(canvas as HTMLCanvasElement, width, height, contrast, saturation, sharpen);
       } catch (err) {
         console.warn('[Upscaler] Frame upscale failed, using canvas 2D fallback:', err);
         if (!enhancedCanvas) {
@@ -1297,9 +1313,7 @@ export async function exportProjectWebCodecs(
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
-  } finally {
-    cleanupOnExit();
-  }
+  
 
   await videoEncoder.flush();
   if (encodeError) throw encodeError;
@@ -1341,18 +1355,7 @@ export async function exportProjectWebCodecs(
     audioEncoder.close();
   }
 
-  videoElements.forEach((video) => {
-    URL.revokeObjectURL(video.src);
-    video.remove();
-  });
-  imageElements.forEach((img) => {
-    URL.revokeObjectURL(img.src);
-  });
-  videoReaders.forEach((reader) => {
-    try {
-      reader.close();
-    } catch { /* ignore */ }
-  });
+
 
   onProgress(95);
   muxer.finalize();
@@ -1360,4 +1363,7 @@ export async function exportProjectWebCodecs(
   onProgress(100);
 
   return new Blob([buffer], { type: 'video/mp4' });
+  } finally {
+    cleanupOnExit();
+  }
 }

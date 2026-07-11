@@ -1,3 +1,5 @@
+import { db } from './db';
+
 /**
  * Origin Private File System (OPFS) helper functions.
  * Storing files in OPFS is secure, fast, and does not block the main thread.
@@ -55,15 +57,34 @@ export async function saveFileToOPFS(path: string, file: File | Blob): Promise<s
  * Retrieve a File object from OPFS at the specified path.
  */
 export async function getFileFromOPFS(path: string): Promise<File> {
-  const root = await navigator.storage.getDirectory();
   const parts = path.split('/');
+  const fileName = parts[parts.length - 1];
+  
+  // Try to find if this asset is a linked file via File System Access API
+  try {
+    const assetId = fileName.substring(0, fileName.lastIndexOf('.')) || fileName;
+    const asset = await db.assets.get(assetId);
+    if (asset && asset.fileHandle) {
+      const handle = asset.fileHandle as any;
+      if ((await handle.queryPermission({ mode: 'read' })) !== 'granted') {
+        // Try to request permission if needed, though this might fail if not in a user gesture.
+        // It's better to try than to fail immediately.
+        await handle.requestPermission({ mode: 'read' });
+      }
+      return await handle.getFile();
+    }
+  } catch (err) {
+    console.warn('Error reading linked file handle, falling back to OPFS:', err);
+  }
+
+  // Fallback to standard OPFS retrieval
+  const root = await navigator.storage.getDirectory();
   let currentDir = root;
 
   for (let i = 0; i < parts.length - 1; i++) {
     currentDir = await currentDir.getDirectoryHandle(parts[i]);
   }
 
-  const fileName = parts[parts.length - 1];
   const fileHandle = await currentDir.getFileHandle(fileName);
   return await fileHandle.getFile();
 }

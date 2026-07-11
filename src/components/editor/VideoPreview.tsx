@@ -108,153 +108,161 @@ export default function VideoPreview() {
     }
   };
 
-  // 1. Load project media files from OPFS and create Blob URLs
-  useEffect(() => {
-    if (!project) return;
-
-    let isSubscribed = true;
+  // Helper to dynamically load/unload media assets virtualized around the current playhead time (+/- 15s)
+  const updateVirtualMedia = async (proj: typeof project, time: number) => {
+    if (!proj) return;
     const mediaMap = mediaElementsRef.current;
+    const imageMap = imageElementsRef.current;
+    const cacheMap = videoFrameCacheRef.current;
 
-    const loadMedia = async () => {
-      setAssetsLoaded(false);
-      
-      // Get all clips that need audio/video media element loading
-      const clipMediaSpecs: { clipId: string; assetId: string }[] = [];
-      const activeClipKeys = new Set<string>();
-      project.tracks.forEach(track => {
-        track.clips.forEach(clip => {
-          if (clip.disabled) return;
-          if (clip.assetId && clip.type !== 'image') {
+    // Get all clips within +/- 15 seconds of the playhead that need audio/video element loading
+    const clipMediaSpecs: { clipId: string; assetId: string }[] = [];
+    const activeClipKeys = new Set<string>();
+    const imageAssetIds = new Set<string>();
+
+    proj.tracks.forEach(track => {
+      track.clips.forEach((clip, clipIdx) => {
+        if (clip.disabled) return;
+        if (!clip.assetId) return;
+
+        // Find transition duration at start/end
+        const transIn = clip.transitionIn && clip.transitionIn.type !== 'none'
+          ? clip.transitionIn.durationMs
+          : 0;
+        let transOut = 0;
+        const nextClip = track.clips[clipIdx + 1];
+        if (nextClip && nextClip.transitionIn && nextClip.transitionIn.type !== 'none') {
+          transOut = nextClip.transitionIn.durationMs;
+        }
+        const startMs = clip.positionMs - transIn / 2;
+        const endMs = clip.positionMs + clip.durationMs + transOut / 2;
+
+        const isNearPlayhead = time >= startMs - 15000 && time < endMs + 15000;
+
+        if (isNearPlayhead) {
+          if (clip.type === 'image') {
+            imageAssetIds.add(clip.assetId);
+          } else {
             clipMediaSpecs.push({ clipId: clip.id, assetId: clip.assetId });
             activeClipKeys.add(`${clip.id}_${clip.assetId}`);
           }
-        });
-      });
-
-      // Get all unique image asset IDs
-      const imageAssetIds = new Set<string>();
-      project.tracks.forEach(track => {
-        track.clips.forEach(clip => {
-          if (clip.disabled) return;
-          if (clip.assetId && clip.type === 'image') {
-            imageAssetIds.add(clip.assetId);
-          }
-        });
-      });
-
-      // Revoke and delete old media elements that are no longer used on the timeline
-      for (const [key, element] of mediaMap.entries()) {
-        if (!activeClipKeys.has(key)) {
-          element.pause();
-          const src = element.src;
-          element.src = '';
-          if (element instanceof HTMLVideoElement) {
-            element.load();
-          }
-          if (src.startsWith('blob:')) {
-            URL.revokeObjectURL(src);
-          }
-          mediaMap.delete(key);
-
-          // Clean up audio nodes for unused media elements
-          const nodes = audioNodesRef.current.get(key);
-          if (nodes) {
-            try {
-              nodes.source.disconnect();
-              nodes.lowFilter.disconnect();
-              nodes.midFilter.disconnect();
-              nodes.highFilter.disconnect();
-            } catch {
-              // Safe cleanup
-            }
-            audioNodesRef.current.delete(key);
-          }
         }
-      }
+      });
+    });
 
-      // Clean up old image elements that are no longer used
-      const imageMap = imageElementsRef.current;
-      for (const [id, element] of imageMap.entries()) {
-        if (!imageAssetIds.has(id)) {
-          const src = element.src;
-          element.src = '';
-          if (src.startsWith('blob:')) {
-            URL.revokeObjectURL(src);
-          }
-          imageMap.delete(id);
+    // Revoke and delete old media elements that are no longer within the playhead window
+    for (const [key, element] of mediaMap.entries()) {
+      if (!activeClipKeys.has(key)) {
+        element.pause();
+        const src = element.src;
+        element.src = '';
+        if (element instanceof HTMLVideoElement) {
+          try { element.load(); } catch (e) {}
         }
-      }
+        if (src.startsWith('blob:')) {
+          URL.revokeObjectURL(src);
+        }
+        mediaMap.delete(key);
 
-      // Load new media elements for audio/video clips (keyed by clipId_assetId for independence)
-      for (const { clipId, assetId } of clipMediaSpecs) {
-        const key = `${clipId}_${assetId}`;
-        if (!mediaMap.has(key)) {
+        // Clean up audio nodes for unused media elements
+        const nodes = audioNodesRef.current.get(key);
+        if (nodes) {
           try {
-            const asset = await db.assets.get(assetId);
-            if (!asset) continue;
+            nodes.source.disconnect();
+            nodes.lowFilter.disconnect();
+            nodes.midFilter.disconnect();
+            nodes.highFilter.disconnect();
+          } catch {
+            // Safe cleanup
+          }
+          audioNodesRef.current.delete(key);
+        }
 
-            const file = await getFileFromOPFS(asset.opfsPath);
-            const objectUrl = URL.createObjectURL(file);
+        // Clean up canvas frame cache to release canvas memory leaks
+        const clipId = key.split('_')[0];
+        cacheMap.delete(clipId);
+      }
+    }
 
-            let mediaEl: HTMLMediaElement;
-            if (asset.type.startsWith('audio/')) {
-              mediaEl = new Audio(objectUrl);
+    // Clean up old image elements
+    for (const [id, element] of imageMap.entries()) {
+      if (!imageAssetIds.has(id)) {
+        const src = element.src;
+        element.src = '';
+        if (src.startsWith('blob:')) {
+          URL.revokeObjectURL(src);
+        }
+        imageMap.delete(id);
+      }
+    }
+
+    // Load new media elements for audio/video clips near playhead
+    for (const { clipId, assetId } of clipMediaSpecs) {
+      const key = `${clipId}_${assetId}`;
+      if (!mediaMap.has(key)) {
+        try {
+          const asset = await db.assets.get(assetId);
+          if (!asset) continue;
+
+          const file = await getFileFromOPFS(asset.opfsPath);
+          const objectUrl = URL.createObjectURL(file);
+
+          let mediaEl: HTMLMediaElement;
+          if (asset.type.startsWith('audio/')) {
+            mediaEl = new Audio(objectUrl);
+          } else {
+            const video = document.createElement('video');
+            video.src = objectUrl;
+            video.muted = false;
+            video.playsInline = true;
+            video.preload = 'auto';
+            mediaEl = video;
+          }
+
+          const handleSeeked = () => {
+            const pending = (mediaEl as any)._pendingSeek;
+            if (pending !== undefined) {
+              (mediaEl as any)._pendingSeek = undefined;
+              mediaEl.currentTime = pending;
             } else {
-              const video = document.createElement('video');
-              video.src = objectUrl;
-              video.muted = false;
-              video.playsInline = true;
-              video.preload = 'auto';
-              mediaEl = video;
+              drawRef.current();
             }
+          };
+          mediaEl.addEventListener('seeked', handleSeeked);
 
-            const handleSeeked = () => {
-              const pending = (mediaEl as any)._pendingSeek;
-              if (pending !== undefined) {
-                (mediaEl as any)._pendingSeek = undefined;
-                mediaEl.currentTime = pending;
-              } else {
-                drawRef.current();
-              }
-            };
-            mediaEl.addEventListener('seeked', handleSeeked);
-
-            mediaMap.set(key, mediaEl);
-          } catch (error) {
-            console.error(`Failed to load asset ${assetId} for clip ${clipId} from OPFS:`, error);
-          }
+          mediaMap.set(key, mediaEl);
+        } catch (error) {
+          console.error(`Failed to load asset ${assetId} for clip ${clipId} from OPFS:`, error);
         }
       }
+    }
 
-      // Load new image assets (keyed by assetId since they are static)
-      for (const assetId of imageAssetIds) {
-        if (!imageMap.has(assetId)) {
-          try {
-            const asset = await db.assets.get(assetId);
-            if (!asset) continue;
+    // Load new image assets near playhead
+    for (const assetId of imageAssetIds) {
+      if (!imageMap.has(assetId)) {
+        try {
+          const asset = await db.assets.get(assetId);
+          if (!asset) continue;
 
-            const file = await getFileFromOPFS(asset.opfsPath);
-            const objectUrl = URL.createObjectURL(file);
+          const file = await getFileFromOPFS(asset.opfsPath);
+          const objectUrl = URL.createObjectURL(file);
 
-            const img = new window.Image();
-            img.src = objectUrl;
-            imageMap.set(assetId, img);
-          } catch (error) {
-            console.error(`Failed to load image asset ${assetId} from OPFS:`, error);
-          }
+          const img = new window.Image();
+          img.src = objectUrl;
+          imageMap.set(assetId, img);
+        } catch (error) {
+          console.error(`Failed to load image asset ${assetId} from OPFS:`, error);
         }
       }
+    }
 
-      if (isSubscribed) {
-        setAssetsLoaded(true);
-      }
-    };
+    setAssetsLoaded(true);
+  };
 
-    loadMedia();
-
-    return () => {
-      isSubscribed = false;
-    };
+  // Trigger initial virtualization when project changes
+  useEffect(() => {
+    if (!project) return;
+    updateVirtualMedia(project, useEditorStore.getState().currentTime);
   }, [project]);
 
   // 2. Clean up media elements on unmount
@@ -316,9 +324,11 @@ export default function VideoPreview() {
   useEffect(() => {
     let lastTime = -1;
     let lastIsPlaying = false;
+    let lastQuantizedTime = -1;
     const unsubscribe = useEditorStore.subscribe((state) => {
       const time = state.currentTime;
       const isPlay = state.isPlaying;
+      const proj = state.project;
       if (time === lastTime && isPlay === lastIsPlaying) return;
       lastTime = time;
       lastIsPlaying = isPlay;
@@ -331,9 +341,16 @@ export default function VideoPreview() {
       if (mobileTimecodeRef.current) mobileTimecodeRef.current.textContent = timecode;
       if (desktopTimecodeRef.current) desktopTimecodeRef.current.textContent = timecode;
 
-      // --- Media Syncing ---
-      const proj = state.project;
+      // --- Playhead-based Virtualization ---
+      if (proj) {
+        const qTime = Math.floor(time / 5000);
+        if (qTime !== lastQuantizedTime) {
+          lastQuantizedTime = qTime;
+          updateVirtualMedia(proj, time);
+        }
+      }
 
+      // --- Media Syncing ---
       if (!proj || !assetsLoaded) return;
 
       if (isPlay) getAudioContext();
@@ -1505,19 +1522,7 @@ export default function VideoPreview() {
     draw();
   }, [project, selectedClipId, assetsLoaded]);
 
-  // 5a. Continuous playback loop
-  useEffect(() => {
-    if (!isPlaying) return;
-    let animationFrameId: number;
-    const loop = () => {
-      drawRef.current();
-      animationFrameId = requestAnimationFrame(loop);
-    };
-    animationFrameId = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [isPlaying]);
-
-  // 5b. Scrubbing redraw
+  // 5b. Scrubbing redraw (when paused)
   useEffect(() => {
     if (!isPlaying) {
       drawRef.current();
@@ -1550,6 +1555,7 @@ export default function VideoPreview() {
         useEditorStore.setState({ playbackSpeed: 1 });
       } else {
         setCurrentTime(nextTime);
+        drawRef.current(); // Synchronized 1-pass draw
         animId = requestAnimationFrame(tick);
       }
     };

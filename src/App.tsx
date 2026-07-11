@@ -1,6 +1,7 @@
 import { useEditorStore } from './store/editorStore';
 import Dashboard from './components/dashboard/Dashboard';
 import EditorLayout from './components/editor/EditorLayout';
+import PwaInstallBanner from './components/PwaInstallBanner';
 
 function App() {
   const currentProjectId = useEditorStore(state => state.currentProjectId);
@@ -8,6 +9,7 @@ function App() {
   return (
     <>
       {currentProjectId ? <EditorLayout /> : <Dashboard />}
+      <PwaInstallBanner />
     </>
   );
 }

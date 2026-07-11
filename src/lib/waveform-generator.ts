@@ -32,6 +32,19 @@ export async function generateWaveformPeaks(opfsPath: string, points = 200): Pro
   let audioCtx: AudioContext | null = null;
   try {
     const file = await getFileFromOPFS(opfsPath);
+
+    // Safety check for massive files to prevent memory/CPU exhaust crashes
+    if (file.size > 100 * 1024 * 1024) {
+      console.warn(`File ${file.name} is too large (${(file.size / 1024 / 1024).toFixed(1)}MB) for in-browser waveform extraction. Generating mock waveform.`);
+      const peaks: number[] = [];
+      let currentVal = 0.4;
+      for (let i = 0; i < points; i++) {
+        currentVal = Math.max(0.1, Math.min(0.8, currentVal + (Math.random() - 0.5) * 0.2));
+        peaks.push(Number(currentVal.toFixed(3)));
+      }
+      return peaks;
+    }
+
     const arrayBuffer = await file.arrayBuffer();
 
     audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();

@@ -33,6 +33,10 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
+  const [unauthorizedAssets, setUnauthorizedAssets] = useState<Asset[]>([]);
+  const [needsPermissionRestore, setNeedsPermissionRestore] = useState(false);
+  const isFileSystemAccessSupported = typeof window !== 'undefined' && 'showOpenFilePicker' in (window as any);
+
   // Fetch assets of the current project
   const assets = useLiveQuery(
     () => db.assets.where('projectId').equals(currentProjectId || '').toArray(),
@@ -250,62 +254,192 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
     assetsRef.current = assets;
   }, [assets]);
 
-  // Extract thumbnails for video and image assets
+  // Check and restore permissions on mount and when assets change
+  useEffect(() => {
+    const checkPermissions = async () => {
+      const linkedAssets = assets.filter(a => !!a.fileHandle);
+      const unauthorized: Asset[] = [];
+      for (const asset of linkedAssets) {
+        if (asset.fileHandle) {
+          const handle = asset.fileHandle as any;
+          try {
+            const status = await handle.queryPermission({ mode: 'read' });
+            if (status !== 'granted') {
+              unauthorized.push(asset);
+            }
+          } catch (e) {
+            unauthorized.push(asset);
+          }
+        }
+      }
+      setUnauthorizedAssets(unauthorized);
+      setNeedsPermissionRestore(unauthorized.length > 0);
+    };
+
+    if (assets.length > 0) {
+      checkPermissions();
+    } else {
+      setNeedsPermissionRestore(false);
+      setUnauthorizedAssets([]);
+    }
+  }, [assets]);
+
+  const handleRestorePermissions = async () => {
+    let restoredCount = 0;
+    for (const asset of unauthorizedAssets) {
+      if (asset.fileHandle) {
+        const handle = asset.fileHandle as any;
+        try {
+          const status = await handle.requestPermission({ mode: 'read' });
+          if (status === 'granted') {
+            restoredCount++;
+          }
+        } catch (e) {
+          console.warn('Failed to restore permission for:', asset.name, e);
+        }
+      }
+    }
+    // Recheck permissions
+    const updatedUnauthorized: Asset[] = [];
+    for (const asset of unauthorizedAssets) {
+      if (asset.fileHandle) {
+        const handle = asset.fileHandle as any;
+        const status = await handle.queryPermission({ mode: 'read' });
+        if (status !== 'granted') {
+          updatedUnauthorized.push(asset);
+        }
+      }
+    }
+    setUnauthorizedAssets(updatedUnauthorized);
+    setNeedsPermissionRestore(updatedUnauthorized.length > 0);
+    
+    // Clear thumbnail cache to trigger recreation of thumbnails for files that now have access
+    if (restoredCount > 0) {
+      setThumbnailCache({});
+    }
+  };
+
+  // Extract thumbnails for video and image assets sequentially (one at a time)
   const assetIds = assets.map(a => a.id).join(',');
   useEffect(() => {
-    assetsRef.current.forEach(async (asset) => {
-      if (thumbnailCacheRef.current[asset.id]) return;
-      if (asset.type.startsWith('audio/')) return;
-      try {
-        const file = await getFileFromOPFS(asset.opfsPath);
-        const objectUrl = URL.createObjectURL(file);
+    let active = true;
+    const generatingIds = new Set<string>();
 
-        // Images: draw directly
-        if (asset.type.startsWith('image/')) {
-          const img = new window.Image();
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            const aspect = img.naturalWidth / (img.naturalHeight || 1);
-            canvas.height = 135;
-            canvas.width = Math.round(135 * aspect);
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-              setThumbnailCache(prev => ({ ...prev, [asset.id]: canvas.toDataURL('image/jpeg', 0.7) }));
+    const processQueue = async () => {
+      const pendingAssets = assets.filter(
+        asset => !thumbnailCache[asset.id] && !asset.type.startsWith('audio/')
+      );
+
+      for (const asset of pendingAssets) {
+        if (!active) break;
+        if (generatingIds.has(asset.id)) continue;
+
+        generatingIds.add(asset.id);
+        try {
+          // If this is a linked file, verify we have permission first
+          if (asset.fileHandle) {
+            const handle = asset.fileHandle as any;
+            const hasPerm = await handle.queryPermission({ mode: 'read' });
+            if (hasPerm !== 'granted') {
+              generatingIds.delete(asset.id);
+              continue;
             }
-            URL.revokeObjectURL(objectUrl);
-          };
-          img.src = objectUrl;
-          return;
-        }
-
-        // Videos: seek to mid-point
-        const video = document.createElement('video');
-        video.src = objectUrl;
-        video.muted = true;
-        video.playsInline = true;
-        video.preload = 'metadata';
-        video.onloadeddata = () => {
-          video.currentTime = Math.min(1, video.duration ? video.duration / 2 : 1);
-        };
-        video.onseeked = () => {
-          const canvas = document.createElement('canvas');
-          const aspect = (video.videoWidth || 240) / (video.videoHeight || 135);
-          canvas.height = 135;
-          canvas.width = Math.round(135 * aspect);
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            setThumbnailCache(prev => ({ ...prev, [asset.id]: canvas.toDataURL('image/jpeg', 0.6) }));
           }
-          URL.revokeObjectURL(objectUrl);
-          video.remove();
-        };
-      } catch (e) {
-        console.warn('Failed to extract thumbnail for sidebar:', e);
+
+          const file = await getFileFromOPFS(asset.opfsPath);
+          if (!active) {
+            generatingIds.delete(asset.id);
+            break;
+          }
+          const objectUrl = URL.createObjectURL(file);
+
+          if (asset.type.startsWith('image/')) {
+            await new Promise<void>((resolve) => {
+              const img = new window.Image();
+              img.onload = () => {
+                if (!active) {
+                  URL.revokeObjectURL(objectUrl);
+                  resolve();
+                  return;
+                }
+                const canvas = document.createElement('canvas');
+                const aspect = img.naturalWidth / (img.naturalHeight || 1);
+                canvas.height = 135;
+                canvas.width = Math.round(135 * aspect);
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                  setThumbnailCache(prev => ({ ...prev, [asset.id]: canvas.toDataURL('image/jpeg', 0.7) }));
+                }
+                URL.revokeObjectURL(objectUrl);
+                resolve();
+              };
+              img.onerror = () => {
+                URL.revokeObjectURL(objectUrl);
+                resolve();
+              };
+              img.src = objectUrl;
+            });
+          } else {
+            // Video sequential seeking
+            await new Promise<void>((resolve) => {
+              const video = document.createElement('video');
+              video.src = objectUrl;
+              video.muted = true;
+              video.playsInline = true;
+              video.preload = 'metadata';
+
+              let resolved = false;
+              const cleanup = () => {
+                if (resolved) return;
+                resolved = true;
+                URL.revokeObjectURL(objectUrl);
+                video.remove();
+                resolve();
+              };
+
+              const timeoutId = setTimeout(cleanup, 10000); // 10s maximum seek wait
+
+              video.onloadeddata = () => {
+                video.currentTime = Math.min(1, video.duration ? video.duration / 2 : 1);
+              };
+
+              video.onseeked = () => {
+                clearTimeout(timeoutId);
+                if (active) {
+                  const canvas = document.createElement('canvas');
+                  const aspect = (video.videoWidth || 240) / (video.videoHeight || 135);
+                  canvas.height = 135;
+                  canvas.width = Math.round(135 * aspect);
+                  const ctx = canvas.getContext('2d');
+                  if (ctx) {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    setThumbnailCache(prev => ({ ...prev, [asset.id]: canvas.toDataURL('image/jpeg', 0.6) }));
+                  }
+                }
+                cleanup();
+              };
+
+              video.onerror = () => {
+                clearTimeout(timeoutId);
+                cleanup();
+              };
+            });
+          }
+        } catch (e) {
+          console.warn('Failed to extract thumbnail for sidebar:', asset.id, e);
+        } finally {
+          generatingIds.delete(asset.id);
+        }
       }
-    });
-  }, [assetIds]);
+    };
+
+    processQueue();
+
+    return () => {
+      active = false;
+    };
+  }, [assetIds, thumbnailCache]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -374,6 +508,88 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  const handleQuickLink = async () => {
+    if (!currentProjectId) return;
+    try {
+      const handles = await (window as any).showOpenFilePicker({
+        multiple: true,
+        types: [
+          {
+            description: 'Media Files',
+            accept: {
+              'video/*': ['.mp4', '.mov', '.webm', '.mkv', '.avi'],
+              'audio/*': ['.mp3', '.wav', '.ogg', '.aac', '.m4a'],
+              'image/*': ['.jpg', '.jpeg', '.png', '.gif', '.webp']
+            }
+          }
+        ]
+      });
+
+      setIsUploading(true);
+      for (const handle of handles) {
+        try {
+          const file = await handle.getFile();
+          const assetId = Math.random().toString(36).substring(2, 9);
+          const fileExt = file.name.split('.').pop() || 'mp4';
+          const opfsPath = `linked://${currentProjectId}/${assetId}.${fileExt}`;
+
+          let durationMs = 5000; // default 5s for images
+          let width: number | undefined;
+          let height: number | undefined;
+
+          if (file.type.startsWith('image/')) {
+            await new Promise<void>((resolve) => {
+              const img = new window.Image();
+              const url = URL.createObjectURL(file);
+              img.onload = () => {
+                width = img.naturalWidth;
+                height = img.naturalHeight;
+                URL.revokeObjectURL(url);
+                resolve();
+              };
+              img.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+              img.src = url;
+            });
+          } else {
+            const metadata = await getMediaMetadata(file);
+            durationMs = metadata.durationMs || 5000;
+            width = metadata.width;
+            height = metadata.height;
+          }
+
+          let waveformPeaks: number[] | undefined;
+          if (!file.type.startsWith('image/')) {
+            waveformPeaks = await generateWaveformPeaks(opfsPath);
+          }
+
+          const newAsset: Asset = {
+            id: assetId,
+            projectId: currentProjectId,
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            durationMs,
+            width,
+            height,
+            opfsPath,
+            waveformPeaks,
+            fileHandle: handle,
+            createdAt: new Date()
+          };
+
+          await db.assets.put(newAsset);
+        } catch (error) {
+          console.error('Failed to link file:', error);
+          alert(`Error linking ${handle.name}`);
+        }
+      }
+    } catch (error) {
+      console.warn('Quick link selection cancelled or failed:', error);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const handleAddToTimeline = async (asset: Asset) => {
     if (!project) return;
 
@@ -427,7 +643,8 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={isUploading}
-            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded text-[11px] font-bold shadow transition cursor-pointer disabled:opacity-50"
+            title="Import media by copying it to browser storage"
+            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 bg-[#1e1e22] hover:bg-[#2c2c32] border border-[#3e3e46] text-gray-200 rounded text-[11px] font-bold shadow transition cursor-pointer disabled:opacity-50 ${!isFileSystemAccessSupported ? 'bg-sky-600 hover:bg-sky-500 text-white border-none' : ''}`}
           >
             {isUploading ? (
               <>
@@ -436,11 +653,33 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
               </>
             ) : (
               <>
-                <Upload className="w-3.5 h-3.5" />
-                Import Media
+                <Upload className={`w-3.5 h-3.5 ${isFileSystemAccessSupported ? 'text-gray-400' : 'text-white'}`} />
+                {isFileSystemAccessSupported ? 'Standard Import' : 'Import Media'}
               </>
             )}
           </button>
+          
+          {isFileSystemAccessSupported && (
+            <button
+              onClick={handleQuickLink}
+              disabled={isUploading}
+              title="Instantly link files from your computer without copying"
+              className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded text-[11px] font-bold shadow transition cursor-pointer disabled:opacity-50"
+            >
+              {isUploading ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Linking...
+                </>
+              ) : (
+                <>
+                  <Plus className="w-3.5 h-3.5" />
+                  Quick Link
+                </>
+              )}
+            </button>
+          )}
+
           <input
             type="file"
             ref={fileInputRef}
@@ -459,6 +698,25 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
             {viewMode === 'grid' ? <List className="w-3.5 h-3.5" /> : <LayoutGrid className="w-3.5 h-3.5" />}
           </button>
         </div>
+
+        {/* Restore local files access banner */}
+        {needsPermissionRestore && (
+          <div className="p-2 bg-amber-950/20 border border-amber-800/40 rounded flex flex-col gap-1.5 text-[10px] text-amber-200">
+            <div className="flex items-center gap-1.5 font-semibold">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>Restore Local File Access</span>
+            </div>
+            <p className="text-amber-300/80 leading-relaxed">
+              Some media files are linked from your device. Browser security requires permission to access them after a page reload.
+            </p>
+            <button
+              onClick={handleRestorePermissions}
+              className="w-full py-1 bg-amber-600 hover:bg-amber-500 text-white rounded font-bold transition cursor-pointer"
+            >
+              Authorize Access ({unauthorizedAssets.length} file{unauthorizedAssets.length !== 1 && 's'})
+            </button>
+          </div>
+        )}
 
         {/* Search & Sort & Filter controls */}
         <div className="flex items-center gap-1.5">

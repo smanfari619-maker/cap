@@ -8,6 +8,7 @@ import VideoPreview from './VideoPreview';
 import ClipInspector from './ClipInspector';
 import Timeline from './Timeline';
 import { exportProjectWebCodecs } from '../../lib/webcodec-exporter';
+import { getFileFromOPFS } from '../../lib/opfs';
 import jellycutLogo from '../../assets/jellycut_logo.svg';
 import MobileMediaPicker from '../mobile/MobileMediaPicker';
 import LipSyncTool from '../dashboard/LipSyncTool';
@@ -260,7 +261,12 @@ export default function EditorLayout() {
     await db.projects.put(updated);
   };
 
-  const handleStartExport = async () => {
+  const handleStartExport = async (overrides?: {
+    resolution?: string;
+    fps?: number;
+    quality?: 'low' | 'medium' | 'high';
+    upscale?: 'standard' | 'enhanced' | 'ai';
+  }) => {
     setIsExporting(true);
     setExportProgress(0);
     setExportBlob(null);
@@ -268,13 +274,62 @@ export default function EditorLayout() {
     setCurrentTime(0);
     exportCancelledRef.current = false;
 
+    const activeResolution = overrides?.resolution ?? exportResolution;
+    const activeFps = overrides?.fps ?? exportFps;
+    const activeQuality = overrides?.quality ?? qualityPreset;
+    const activeUpscale = overrides?.upscale ?? upscaleMode;
+
     try {
+      // 1. Check for Lossless Direct Stream Copy candidate
+      let directCopyClip: any = null;
+      let totalClips = 0;
+      project.tracks.forEach(track => {
+        if (track.type === 'video') {
+          track.clips.forEach(clip => {
+            if (!clip.disabled) {
+              totalClips++;
+              if (clip.type === 'video') {
+                directCopyClip = clip;
+              }
+            }
+          });
+        } else if (track.type === 'audio' || track.type === 'text') {
+          if (track.clips.some(c => !c.disabled)) {
+            totalClips = 999; // force normal render
+          }
+        }
+      });
+
+      if (totalClips === 1 && directCopyClip && directCopyClip.assetId) {
+        const hasEffects = (directCopyClip.videoEffects && directCopyClip.videoEffects.length > 0) ||
+                          (directCopyClip.filterSettings && directCopyClip.filterSettings.intensity > 0) ||
+                          (directCopyClip.colorAdjustments && Object.values(directCopyClip.colorAdjustments).some(v => v !== 0 && v !== 100));
+        const hasTransitions = directCopyClip.transitionIn && directCopyClip.transitionIn.type !== 'none';
+        const isTrimmed = directCopyClip.trimStartMs > 100 || directCopyClip.trimEndMs > 100;
+        const hasSpeed = directCopyClip.speed && directCopyClip.speed !== 1.0;
+        const hasVolume = directCopyClip.volume && directCopyClip.volume !== 100;
+        const hasTransform = directCopyClip.transform && (directCopyClip.transform.scale !== 100 || directCopyClip.transform.x !== 0 || directCopyClip.transform.y !== 0);
+
+        if (!hasEffects && !hasTransitions && !isTrimmed && !hasSpeed && !hasVolume && !hasTransform) {
+          const asset = await db.assets.get(directCopyClip.assetId);
+          if (asset) {
+            setExportProgress(50);
+            const file = await getFileFromOPFS(asset.opfsPath);
+            setExportProgress(100);
+            setExportBlob(file);
+            setIsExporting(false);
+            console.log('[Export] Lossless Direct Stream Copy completed in 0s!');
+            return;
+          }
+        }
+      }
+
       let width = 1920;
       let height = 1080;
       const isPortrait = project.width < project.height;
       const isSquare = project.width === project.height;
 
-      if (exportResolution === '2k') {
+      if (activeResolution === '2k') {
         if (isPortrait) {
           width = 1440; height = 2560;
         } else if (isSquare) {
@@ -282,7 +337,7 @@ export default function EditorLayout() {
         } else {
           width = 2560; height = 1440;
         }
-      } else if (exportResolution === '720p') {
+      } else if (activeResolution === '720p') {
         if (isPortrait) {
           width = 720; height = 1280;
         } else if (isSquare) {
@@ -290,7 +345,7 @@ export default function EditorLayout() {
         } else {
           width = 1280; height = 720;
         }
-      } else if (exportResolution === '480p') {
+      } else if (activeResolution === '480p') {
         if (isPortrait) {
           width = 480; height = 854;
         } else if (isSquare) {
@@ -308,22 +363,20 @@ export default function EditorLayout() {
         }
       }
 
-
-
       // Determine Bitrate based on preset and resolution
       let baseBitrate = 8000000; // 8 Mbps (medium)
-      if (qualityPreset === 'low') baseBitrate = 4000000; // 4 Mbps
-      if (qualityPreset === 'high') baseBitrate = 16000000; // 16 Mbps
+      if (activeQuality === 'low') baseBitrate = 4000000; // 4 Mbps
+      if (activeQuality === 'high') baseBitrate = 16000000; // 16 Mbps
       
       // Scale bitrate for high resolutions
-      if (exportResolution === '2k') baseBitrate = Math.round(baseBitrate * 1.8);
+      if (activeResolution === '2k') baseBitrate = Math.round(baseBitrate * 1.8);
 
       const settings = {
         width:  width,
         height: height,
-        fps: exportFps,
+        fps: activeFps,
         bitrate: baseBitrate,
-        upscaleMode: upscaleMode,
+        upscaleMode: activeUpscale,
         onUpscaleProgress: (stage: string, percent: number) => {
           setUpscaleStage(stage);
           setUpscaleStageProgress(percent);
@@ -335,7 +388,7 @@ export default function EditorLayout() {
       for (const track of project.tracks)
         for (const clip of track.clips)
           durMs = Math.max(durMs, clip.positionMs + clip.durationMs);
-      setTotalFrames(Math.ceil((durMs / 1000) * exportFps));
+      setTotalFrames(Math.ceil((durMs / 1000) * activeFps));
       setCurrentFrame(0);
 
       const blob = await exportProjectWebCodecs(
@@ -343,7 +396,6 @@ export default function EditorLayout() {
         settings,
         (progress) => {
           setExportProgress(progress);
-          // Estimate current frame from progress (15%→85% = frame rendering window)
           if (progress >= 15 && progress <= 85) {
             setCurrentFrame(Math.round(((progress - 15) / 70) * totalFrames));
           }
@@ -355,6 +407,9 @@ export default function EditorLayout() {
       setIsExporting(false);
     } catch (err: any) {
       console.warn('Export finished or cancelled:', err);
+      if (err?.message !== 'Export cancelled') {
+        alert('Export Failed: ' + (err?.message || err || 'Unknown error'));
+      }
       setIsExporting(false);
       setExportProgress(0);
     }
@@ -1039,7 +1094,7 @@ export default function EditorLayout() {
                     >
                       <option value="standard">None (Normal Render)</option>
                       <option value="enhanced">Enhanced (Contrast/Sharpen)</option>
-                      <option value="ai">AI Real-ESRGAN x4 (WebGPU)</option>
+                      <option value="ai">Jelly Sharp (Maximum Detail)</option>
                     </select>
                   </div>
                 </div>
@@ -1055,12 +1110,14 @@ export default function EditorLayout() {
                     <span>Use Native OS File Picker</span>
                   </label>
 
-                  <button
-                    onClick={handleStartExport}
-                    className="px-5 py-2 text-xs font-bold text-white bg-sky-650 hover:bg-sky-550 rounded transition shadow shadow-sky-600/15 cursor-pointer"
-                  >
-                    Start Rendering
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleStartExport()}
+                      className="px-5 py-2 text-xs font-bold text-white bg-sky-650 hover:bg-sky-550 rounded transition shadow shadow-sky-600/15 cursor-pointer"
+                    >
+                      Start Rendering
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1072,7 +1129,7 @@ export default function EditorLayout() {
                 <div className="space-y-1.5">
                   <p className="text-xs font-bold text-gray-250">
                     {upscaleMode === 'ai' && exportProgress < 20 
-                      ? 'Initializing AI Neural Models...' 
+                      ? 'Initializing Jelly Sharp Upscaler...' 
                       : 'Rendering Video Frames...'}
                   </p>
                   <p className="text-[10px] text-zinc-550">
@@ -1117,7 +1174,7 @@ export default function EditorLayout() {
                   <p><strong className="text-gray-300">File Format:</strong> MP4 (MPEG-4 H.264)</p>
                   <p><strong className="text-gray-300">File Size:</strong> {(exportBlob.size / (1024 * 1024)).toFixed(2)} MB</p>
                   <p><strong className="text-gray-300">Output Quality:</strong> {exportResolution} @ {exportFps}fps</p>
-                  <p><strong className="text-gray-300">AI Upscale:</strong> {upscaleMode === 'ai' ? '✅ Real-ESRGAN x4 (WebGPU/WASM)' : upscaleMode === 'enhanced' ? 'Fast Browser Enhance' : 'Standard'}</p>
+                  <p><strong className="text-gray-300">AI Upscale:</strong> {upscaleMode === 'ai' ? '✅ Jelly Sharp Algorithm' : upscaleMode === 'enhanced' ? 'Fast Browser Enhance' : 'Standard'}</p>
                 </div>
 
                 <div className="flex gap-3 pt-2">

@@ -7,29 +7,14 @@ import { useEditorStore } from '../store/editorStore';
  * Excludes inputs, textareas, and contenteditable nodes from triggers.
  */
 export function useHotkeys() {
-  const project = useEditorStore(state => state.project);
-  const isPlaying = useEditorStore(state => state.isPlaying);
-  const setIsPlaying = useEditorStore(state => state.setIsPlaying);
-  const currentTime = useEditorStore(state => state.currentTime);
-  const setCurrentTime = useEditorStore(state => state.setCurrentTime);
-  const zoom = useEditorStore(state => state.zoom);
-  const setZoom = useEditorStore(state => state.setZoom);
-  const selectedClipId = useEditorStore(state => state.selectedClipId);
-  const selectedClipIds = useEditorStore(state => state.selectedClipIds);
-  const setSelectedClipId = useEditorStore(state => state.setSelectedClipId);
-  const setSelectedClipIds = useEditorStore(state => state.setSelectedClipIds);
-  const toolMode = useEditorStore(state => state.toolMode);
-  const setToolMode = useEditorStore(state => state.setToolMode);
-  const removeClip = useEditorStore(state => state.removeClip);
-  const splitClipAtPlayhead = useEditorStore(state => state.splitClipAtPlayhead);
-  const addClip = useEditorStore(state => state.addClip);
-  const updateMarkers = useEditorStore(state => state.updateMarkers);
-  const undo = useEditorStore(state => state.undo);
-  const redo = useEditorStore(state => state.redo);
-  const playbackSpeed = useEditorStore(state => state.playbackSpeed);
-
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const state = useEditorStore.getState();
+      const { 
+        project, isPlaying, currentTime, zoom, selectedClipIds, playbackSpeed,
+        setIsPlaying, setCurrentTime, setZoom, setToolMode, 
+        removeClip, splitClipAtPlayhead, updateMarkers, undo, redo, setSelectedClipIds
+      } = state;
       if (
         document.activeElement?.tagName === 'INPUT' ||
         document.activeElement?.tagName === 'TEXTAREA' ||
@@ -181,26 +166,5 @@ export function useHotkeys() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    project,
-    isPlaying,
-    setIsPlaying,
-    currentTime,
-    setCurrentTime,
-    zoom,
-    setZoom,
-    selectedClipId,
-    selectedClipIds,
-    setSelectedClipId,
-    setSelectedClipIds,
-    toolMode,
-    setToolMode,
-    removeClip,
-    splitClipAtPlayhead,
-    addClip,
-    updateMarkers,
-    undo,
-    redo,
-    playbackSpeed
-  ]);
+  }, []);
 }

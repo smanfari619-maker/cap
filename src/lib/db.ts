@@ -12,6 +12,7 @@ export interface Asset {
   opfsPath: string;
   createdAt: Date;
   waveformPeaks?: number[];
+  fileHandle?: FileSystemFileHandle;
 }
 
 export interface TimelineClip {
