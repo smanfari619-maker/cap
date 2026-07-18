@@ -23,6 +23,7 @@
     "mp4box": "^2.4.1",
     "onnxruntime-web": "^1.27.0",
     "opencv-js-wasm": "^5.0.0-alpha",
+    "polygon-clipping": "^0.15.7",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "zustand": "^5.0.14"
