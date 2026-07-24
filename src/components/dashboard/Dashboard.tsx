@@ -16,6 +16,7 @@ import LipSyncTool from './LipSyncTool';
 import StoryCutterTool from './StoryCutterTool';
 import BackgroundRemoverTool from './BackgroundRemoverTool';
 import AudioDenoiserTool from './AudioDenoiserTool';
+import AIVideoGeneratorTool from './AIVideoGeneratorTool';
 import { BUILTIN_TEMPLATES, applyTemplate } from '../../lib/template-engine';
 import { downloadProjectBackup, generateShareLink } from '../../lib/cloud-sync';
 
@@ -26,7 +27,7 @@ export default function Dashboard() {
   const projectsVersion = useMemo(() => projects.map(p => `${p.id}-${p.updatedAt?.getTime() ?? 0}`).join(','), [projects]);
   
   // Desktop layout states
-  const [activeView, setActiveView] = useState<'home' | 'projects' | 'templates' | 'ai-tools'>('home');
+  const [activeView, setActiveView] = useState<'home' | 'projects' | 'templates' | 'ai-tools' | 'ai-studio'>('home');
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
   const [selectedTemplateCategory, setSelectedTemplateCategory] = useState<string>('all');
   const [openSettingsModal, setOpenSettingsModal] = useState(false);
@@ -792,6 +793,30 @@ export default function Dashboard() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* ✦ AI Video Generator — Featured */}
+          <div
+            onClick={() => setActiveView('ai-studio')}
+            className="premium-card p-6 flex flex-col justify-between h-[200px] cursor-pointer group col-span-1 md:col-span-2 border border-white/10 bg-gradient-to-br from-[#141416] to-[#0e0e10]"
+          >
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-xl bg-white/10 border border-white/15 text-white flex items-center justify-center shrink-0">
+                <Sparkles className="w-6 h-6" />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <h4 className="font-bold text-sm text-white">AI Video Studio</h4>
+                  <span className="text-[8px] font-bold uppercase tracking-widest px-2 py-0.5 bg-white text-black rounded-full">NEW</span>
+                </div>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  Generate cinematic videos from text or images using Hailuo Fast ($0.19/clip) or Kling 3.0 with multi-shot storyboards, native audio, and camera controls.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end pt-4">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-white group-hover:text-zinc-300 flex items-center gap-1">Open Studio &rarr;</span>
+            </div>
+          </div>
+
           {/* Story Cutter */}
           <StoryCutterTool
             renderTrigger={(open) => (
@@ -1012,6 +1037,23 @@ export default function Dashboard() {
             )}
           />
 
+          {/* AI Video Generator quick card */}
+          <div
+            onClick={() => { setActiveView('ai-studio'); setIsRightPanelOpen(false); }}
+            className="flex items-center justify-between p-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/8 cursor-pointer transition group"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-white/10 border border-white/15 text-white flex items-center justify-center shrink-0">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="font-bold text-[11px] text-white leading-tight">AI Video Studio</h4>
+                <span className="text-[9px] text-zinc-500">Generate from text/image</span>
+              </div>
+            </div>
+            <span className="text-zinc-550 text-xs font-semibold select-none group-hover:text-zinc-350">&gt;</span>
+          </div>
+
           <LipSyncTool
             renderTrigger={(open) => (
               <div 
@@ -1179,6 +1221,7 @@ export default function Dashboard() {
               { id: 'projects', label: 'Projects', icon: Folder },
               { id: 'templates', label: 'Templates', icon: Sparkles },
               { id: 'ai-tools', label: 'AI Tools', icon: Cpu },
+              { id: 'ai-studio', label: 'AI Studio', icon: Sparkles },
             ].map((tab) => {
               const Icon = tab.icon;
               const active = activeView === tab.id;
@@ -1237,6 +1280,11 @@ export default function Dashboard() {
           {activeView === 'projects' && renderProjectsView()}
           {activeView === 'templates' && renderTemplatesView()}
           {activeView === 'ai-tools' && renderAiToolsView()}
+          {activeView === 'ai-studio' && (
+            <div className="absolute inset-0 z-10 bg-[#0a0a0c]">
+              <AIVideoGeneratorTool inline onClose={() => setActiveView('ai-tools')} />
+            </div>
+          )}
         </div>
 
         {/* MOBILE VIEW (Unchanged core logic) */}

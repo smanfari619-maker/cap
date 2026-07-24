@@ -439,7 +439,7 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
     return () => {
       active = false;
     };
-  }, [assetIds, thumbnailCache]);
+  }, [assetIds, thumbnailCache, assets]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;

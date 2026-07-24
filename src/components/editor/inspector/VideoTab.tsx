@@ -47,6 +47,7 @@ export default function VideoTab({
 }: VideoTabProps) {
   const [isAnalyzingScenes, setIsAnalyzingScenes] = useState(false);
   const [sceneAnalysisProgress, setSceneAnalysisProgress] = useState<number | null>(null);
+  const [mode, setMode] = useState<'translucent' | 'opaque'>('opaque');
 
   const formatTime = (ms: number) => {
     const sec = (ms / 1000).toFixed(2);
@@ -635,42 +636,16 @@ export default function VideoTab({
             Draw a rectangle over the watermark on the video preview. Runs reverse alpha blending locally — no uploads.
           </p>
 
+
+
           {/* Step 1: Draw region or Auto Remove */}
           {!watermarkRegion && wmStatus === 'idle' && (
             <div className="flex flex-col gap-2">
               <button
-                onClick={async () => {
-                  if (!selectedClip?.assetId || !project) return;
-                  setWmStatus('processing');
-                  setWmProgress(0);
-                  setWmError(null);
-                  try {
-                    const asset = await db.assets.get(selectedClip.assetId);
-                    if (!asset) throw new Error('Asset not found in database.');
-                    const newAsset = await removeWatermark(
-                      asset,
-                      null, // null region triggers fully automatic scan
-                      project.id,
-                      (p) => setWmProgress(Math.round(p * 100))
-                    );
-                    await updateClip(selectedClip.id, { assetId: newAsset.id, name: newAsset.name });
-                    setWmStatus('done');
-                  } catch (err: any) {
-                    console.error('[Watermark Removal Error]', err);
-                    setWmStatus('error');
-                    setWmError(err?.message ?? String(err));
-                  }
-                }}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-[10px] font-bold transition bg-violet-700 hover:bg-violet-600 text-white cursor-pointer"
-              >
-                <Sparkles className="w-3.5 h-3.5" /> Auto Detect & Remove
-              </button>
-              
-              <button
                 onClick={() => setIsDrawModalOpen(true)}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-[10px] font-semibold transition border bg-zinc-900/50 border-dashed border-zinc-700 hover:border-zinc-500 text-zinc-400 hover:text-zinc-300 cursor-pointer"
+                className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-[10px] font-semibold transition border bg-zinc-900/50 border-dashed border-zinc-700 hover:border-zinc-500 text-zinc-400 hover:text-zinc-300 cursor-pointer"
               >
-                <Crosshair className="w-3.5 h-3.5" /> Draw Region (Manual Fallback)
+                <Crosshair className="w-3.5 h-3.5" /> Draw Region to Remove Watermark
               </button>
             </div>
           )}
@@ -706,6 +681,7 @@ export default function VideoTab({
                         asset,
                         watermarkRegion,
                         project.id,
+                        mode,
                         (p) => setWmProgress(Math.round(p * 100))
                       );
                       await updateClip(selectedClip.id, { assetId: newAsset.id, name: newAsset.name });

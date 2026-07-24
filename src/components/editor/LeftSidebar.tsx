@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Loader2, Sparkles, Sliders, Check, Music, Timer, Trash2 } from 'lucide-react';
+import { 
+  Plus, Loader2, Sparkles, Sliders, Check, Music, Timer, Trash2,
+  Film, Type, Smile, Zap, Languages, Palette, Users, ChevronLeft, ChevronRight
+} from 'lucide-react';
 import { useEditorStore } from '../../store/editorStore';
 import { db } from '../../lib/db';
 import type { ProjectVersion } from '../../lib/db';
@@ -11,13 +14,31 @@ import TransitionsPanel from './sidebar/TransitionsPanel';
 import MediaPanel from './sidebar/MediaPanel';
 import { saveFileToOPFS } from '../../lib/opfs';
 import { generateAISoundtrack } from '../../lib/audio-synth-generator';
+import LipSyncTool from '../dashboard/LipSyncTool';
+import { Tooltip } from '../ui/Tooltip';
 
 interface LeftSidebarProps {
   width: number;
   activeTab: string;
+  setActiveTab: (tab: string) => void;
+  setWidth?: (w: number) => void;
 }
 
-export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
+const railTabs = [
+  { id: 'media', label: 'Media', icon: Film },
+  { id: 'audio', label: 'Audio', icon: Music },
+  { id: 'text', label: 'Text', icon: Type },
+  { id: 'stickers', label: 'Stickers', icon: Smile },
+  { id: 'effects', label: 'Effects', icon: Sparkles },
+  { id: 'transitions', label: 'Transitions', icon: Zap },
+  { id: 'captions', label: 'Captions', icon: Languages },
+  { id: 'filters', label: 'Filters', icon: Palette },
+  { id: 'adjustment', label: 'Adjustment', icon: Sliders },
+  { id: 'ai-avatars', label: 'AI Avatars', icon: Users },
+  { id: 'history', label: 'History', icon: Timer },
+];
+
+export default function LeftSidebar({ width, activeTab, setActiveTab, setWidth }: LeftSidebarProps) {
   const project = useEditorStore(state => state.project);
   const selectedClipId = useEditorStore(state => state.selectedClipId);
   const updateClip = useEditorStore(state => state.updateClip);
@@ -30,6 +51,8 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
 
   const [snapshotLabel, setSnapshotLabel] = useState('');
   const [isTakingSnapshot, setIsTakingSnapshot] = useState(false);
+
+  const isExpanded = width > 52;
 
   const snapshots = useLiveQuery<ProjectVersion[]>(
     () => project
@@ -50,7 +73,6 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
   const [aiMood, setAiMood] = useState<'chill' | 'tech' | 'epic'>('chill');
   const [aiDuration, setAiDuration] = useState(30);
   const [isGeneratingSoundtrack, setIsGeneratingSoundtrack] = useState(false);
-
   const handleAddTextPreset = async (styleType: string) => {
     const textTrack = project?.tracks.find(t => t.type === 'text');
     if (!textTrack || !project) return;
@@ -356,17 +378,86 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
 
   return (
     <div 
-      className="flex flex-col h-full bg-[#18181c] border-r border-[#2c2c32] text-gray-200 overflow-hidden select-none"
+      className="flex h-full bg-[#121215] border-r border-[#222226] text-gray-200 overflow-hidden select-none"
       style={{ 
         width: window.innerWidth < 1024 ? '100%' : width, 
         display: width === 0 ? 'none' : 'flex' 
       }}
     >
+      {/* Vertical Icon Rail (Figma / Runway Collapsible Style) */}
+      <div className="w-[52px] shrink-0 border-r border-[#222226] bg-[#0a0a0c] flex flex-col items-center py-3 gap-1 z-20">
+        {railTabs.map(tab => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+
+          const handleClick = () => {
+            if (isActive && isExpanded) {
+              if (setWidth) setWidth(52);
+            } else {
+              setActiveTab(tab.id);
+              if (!isExpanded && setWidth) setWidth(320);
+            }
+          };
+
+          if (tab.id === 'ai-avatars') {
+            return (
+              <LipSyncTool
+                key={tab.id}
+                renderTrigger={(open) => (
+                  <Tooltip content={tab.label} position="right">
+                    <button
+                      onClick={() => {
+                        handleClick();
+                        open();
+                      }}
+                      className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${
+                        isActive && isExpanded
+                          ? 'bg-white text-black font-bold shadow-md'
+                          : 'text-zinc-400 hover:text-white hover:bg-[#18181c]'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                    </button>
+                  </Tooltip>
+                )}
+              />
+            );
+          }
+
+          return (
+            <Tooltip key={tab.id} content={tab.label} position="right">
+              <button
+                onClick={handleClick}
+                className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${
+                  isActive && isExpanded
+                    ? 'bg-white text-black font-bold shadow-md'
+                    : 'text-zinc-400 hover:text-white hover:bg-[#18181c]'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+              </button>
+            </Tooltip>
+          );
+        })}
+
+        <div className="mt-auto pt-2 border-t border-[#222226] w-full flex justify-center">
+          <Tooltip content={isExpanded ? "Collapse Sidebar" : "Expand Sidebar"} position="right">
+            <button
+              onClick={() => {
+                if (setWidth) setWidth(isExpanded ? 52 : 320);
+              }}
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-zinc-500 hover:text-white hover:bg-[#18181c] transition"
+            >
+              {isExpanded ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+            </button>
+          </Tooltip>
+        </div>
+      </div>
       
-      {/* Tab Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        
-        {/* Media Library Tab */}
+      {/* Tab Content Panel (rendered when expanded) */}
+      {(isExpanded || window.innerWidth < 1024) && (
+        <div className="flex-1 flex flex-col overflow-hidden bg-[#121215]">
+          {/* Media Library Tab */}
         {activeTab === 'media' && (
           <MediaPanel
             activeTab={activeTab}
@@ -1070,7 +1161,8 @@ export default function LeftSidebar({ width, activeTab }: LeftSidebarProps) {
           </div>
         )}
 
-      </div>
+        </div>
+      )}
     </div>
   );
 }

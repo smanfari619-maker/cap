@@ -28,25 +28,25 @@ export default function TrackHeader({
 }: TrackHeaderProps) {
 
   let Icon = Type;
-  let iconColor = 'text-fuchsia-400';
-  let accentColor = 'border-l-fuchsia-500';
-  let bgGradient = 'from-fuchsia-950/10';
+  let iconColor = 'text-zinc-300';
+  let accentColor = 'border-l-white';
+  let bgGradient = 'from-zinc-900/30';
 
   if (track.type === 'video') {
     Icon = ImageIcon;
-    iconColor = 'text-teal-400';
-    accentColor = 'border-l-teal-500';
-    bgGradient = 'from-teal-950/10';
+    iconColor = 'text-zinc-200';
+    accentColor = 'border-l-zinc-300';
+    bgGradient = 'from-zinc-900/20';
   } else if (track.type === 'audio') {
     Icon = Music;
-    iconColor = track.muted ? 'text-zinc-500' : 'text-sky-400';
-    accentColor = track.muted ? 'border-l-zinc-600' : 'border-l-sky-500';
-    bgGradient = track.muted ? 'from-zinc-950/20' : 'from-sky-950/10';
+    iconColor = track.muted ? 'text-zinc-600' : 'text-zinc-300';
+    accentColor = track.muted ? 'border-l-zinc-700' : 'border-l-zinc-400';
+    bgGradient = track.muted ? 'from-zinc-950/20' : 'from-zinc-900/20';
   } else if (track.type === 'effect') {
     Icon = Sparkles;
-    iconColor = 'text-purple-400';
-    accentColor = 'border-l-purple-500';
-    bgGradient = 'from-purple-950/15';
+    iconColor = 'text-zinc-400';
+    accentColor = 'border-l-zinc-500';
+    bgGradient = 'from-zinc-900/10';
   }
 
   const trackHeight = {

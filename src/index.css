@@ -16,16 +16,18 @@
 
 :root {
   color-scheme: dark;
-  --bg-dark: #1e1e1e;
-  --surface-dark: #252525;
-  --surface-hover: #3a3a3a;
-  --border-dark: #333333;
-  --border-strong: #444444;
-  --text-primary: #f3f4f6;
-  --text-secondary: #9ca3af;
-  --text-muted: #6b7280;
-  --accent: #00aaff;
-  --accent-hover: #0088cc;
+  --bg-dark: #0a0a0c;
+  --surface-dark: #121215;
+  --surface-elevated: #18181c;
+  --surface-hover: #222226;
+  --border-dark: #242429;
+  --border-strong: #38383e;
+  --text-primary: #ffffff;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --accent: #ffffff;
+  --accent-hover: #e4e4e7;
+  --playhead-color: #ffffff;
   
   font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
   background-color: var(--bg-dark);
@@ -40,8 +42,8 @@ html {
 
 body {
   margin: 0;
-  background-color: #1e1e1e;
-  color: #f4f4f5;
+  background-color: #0a0a0c;
+  color: #ffffff;
   overflow: hidden;
   overflow-x: hidden;
   max-width: 100vw;
@@ -59,10 +61,10 @@ body {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
-   Color Theme Overrides for Sleek Premiere Pro / CapCut Charcoal Grey Theme
+   Color Theme Overrides for Ultra-Sleek Monochrome Black & White Theme
    ───────────────────────────────────────────────────────────────────────── */
 
-/* Dark panel backgrounds (sidebar, timeline, main body) */
+/* Dark panel backgrounds */
 .bg-\[\#121214\],
 .bg-\[\#111114\],
 .bg-\[\#0f0f12\],
@@ -72,20 +74,20 @@ body {
 .bg-\[\#0a0a0c\],
 .bg-zinc-950,
 .bg-black {
-  background-color: #1e1e1e !important;
+  background-color: #0a0a0c !important;
 }
 
-/* Darker background for the video player backdrop to make the video stand out */
+/* Video canvas backdrop */
 div.min-h-0.relative.p-4.bg-\[\#121214\] {
-  background-color: #141414 !important;
+  background-color: #050506 !important;
 }
 
-/* Headers, panels, popovers, and secondary surfaces */
+/* Headers, panels, popovers, secondary surfaces */
 .bg-\[\#18181c\],
 .bg-\[\#1a1a20\],
 .bg-\[\#202024\],
 .bg-zinc-900 {
-  background-color: #282828 !important;
+  background-color: #121215 !important;
 }
 
 /* Borders */
@@ -94,7 +96,7 @@ div.min-h-0.relative.p-4.bg-\[\#121214\] {
 .border-\[\#1a1a1e\],
 .border-zinc-800,
 .border-zinc-900 {
-  border-color: #323232 !important;
+  border-color: #222226 !important;
 }
 
 /* Button & item hover states */
@@ -102,236 +104,117 @@ div.min-h-0.relative.p-4.bg-\[\#121214\] {
 .hover\:bg-\[\#2c2c30\]:hover,
 .hover\:bg-zinc-800:hover,
 .hover\:bg-\[\#202026\]:hover {
-  background-color: #383838 !important;
+  background-color: #1c1c21 !important;
 }
 
 /* Custom scrollbar styling */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #1e1e1e;
+  background: #0a0a0c;
 }
 ::-webkit-scrollbar-thumb {
-  background: #444444;
+  background: #27272a;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #555555;
+  background: #3f3f46;
 }
 
-/* Timeline-specific scrollbar: always-visible horizontal, hidden vertical */
-.timeline-scroll {
-  scrollbar-gutter: stable;
-}
-
-/* Always show the horizontal scrollbar on the timeline */
+/* Timeline-specific scrollbar */
 .timeline-scroll::-webkit-scrollbar {
-  width: 0px;        /* hide vertical bar */
-  height: 8px;       /* horizontal bar height */
+  width: 0px;
+  height: 6px;
 }
 .timeline-scroll::-webkit-scrollbar-track {
-  background: #141414;
-  border-top: 1px solid #323232;
+  background: #0a0a0c;
+  border-top: 1px solid #1c1c21;
 }
 .timeline-scroll::-webkit-scrollbar-thumb {
-  background: #2d4a52;
-  border-radius: 4px;
-  border: 1px solid #1a3540;
+  background: #27272a;
+  border-radius: 3px;
 }
 .timeline-scroll::-webkit-scrollbar-thumb:hover {
-  background: #3a6070;
-}
-/* Firefox */
-.timeline-scroll {
-  scrollbar-width: thin;
-  scrollbar-color: #2d4a52 #141414;
+  background: #52525b;
 }
 
-/* Custom range slider styling */
+/* Range slider styling */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   background: transparent !important;
-  height: 14px !important; /* Sufficient height to avoid thumb clipping */
+  height: 14px !important;
   outline: none;
   padding: 0;
   margin: 0;
 }
 
-/* Track styling */
 input[type="range"]::-webkit-slider-runnable-track {
   width: 100%;
-  height: 4px;
-  background: #323232; /* border-dark track color */
+  height: 3px;
+  background: #27272a;
   border-radius: 9999px;
 }
 
-input[type="range"]::-moz-range-track {
-  width: 100%;
-  height: 4px;
-  background: #323232;
-  border-radius: 9999px;
-}
-
-/* Thumb styling */
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   height: 10px;
   width: 10px;
   border-radius: 50%;
-  background: #8b5cf6; /* violet-500 thumb color */
+  background: #ffffff;
   cursor: pointer;
-  margin-top: -3px; /* Centering offset: (4px / 2) - (10px / 2) = 2px - 5px = -3px */
-  transition: background 0.15s ease, transform 0.1s ease;
+  margin-top: -3.5px;
+  transition: transform 0.15s ease, background 0.15s ease;
 }
 
 input[type="range"]::-webkit-slider-thumb:hover {
-  background: #a78bfa; /* violet-400 */
-  transform: scale(1.2);
+  transform: scale(1.3);
+  background: #ffffff;
 }
 
-input[type="range"]::-moz-range-thumb {
-  height: 10px;
-  width: 10px;
-  border: none;
-  border-radius: 50%;
-  background: #8b5cf6;
-  cursor: pointer;
-  transition: background 0.15s ease, transform 0.1s ease;
-}
-
-input[type="range"]::-moz-range-thumb:hover {
-  background: #a78bfa;
-  transform: scale(1.2);
-}
-
-/* ── Transition card preview animations ── */
-@keyframes shimmer {
-  0%   { transform: translateX(-100%); }
-  100% { transform: translateX(200%); }
-}
-
-@keyframes wipe-preview {
-  0%   { clip-path: inset(0 100% 0 0); }
-  50%  { clip-path: inset(0 0% 0 0); }
-  100% { clip-path: inset(0 100% 0 0); }
-}
-
-/* ── Effect card pulse ── */
-@keyframes effect-pulse {
-  0%, 100% { opacity: 0.4; }
-  50%       { opacity: 0.8; }
-}
-
-/* ─────────────────────────────────────────────────────────────────────────
-   Jellycut Professional Redesign Styles
-   ───────────────────────────────────────────────────────────────────────── */
+/* Glass Panels */
 .glass-panel {
-  background: rgba(35, 35, 38, 0.45) !important;
+  background: rgba(18, 18, 21, 0.7) !important;
   backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.05) !important;
-}
-
-.glass-panel-strong {
-  background: rgba(26, 26, 28, 0.8) !important;
-  backdrop-filter: blur(24px);
   border: 1px solid rgba(255, 255, 255, 0.08) !important;
 }
 
+.glass-panel-strong {
+  background: rgba(10, 10, 12, 0.9) !important;
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+}
+
 .glow-hover {
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .glow-hover:hover {
-  box-shadow: 0 10px 30px -10px rgba(139, 92, 246, 0.3);
-  border-color: rgba(139, 92, 246, 0.35) !important;
-  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.3) !important;
+  box-shadow: 0 8px 24px -6px rgba(255, 255, 255, 0.08);
+  transform: translateY(-1px);
 }
 
-.glow-hover-blue {
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.glow-hover-blue:hover {
-  box-shadow: 0 10px 30px -10px rgba(6, 182, 212, 0.3);
-  border-color: rgba(6, 182, 212, 0.35) !important;
-  transform: translateY(-2px);
-}
-
-.purple-glow-accent {
-  background: radial-gradient(circle at 50% 50%, rgba(139, 92, 246, 0.08) 0%, transparent 60%);
-}
-
-.blue-glow-accent {
-  background: radial-gradient(circle at 50% 50%, rgba(6, 182, 212, 0.05) 0%, transparent 70%);
-}
-
-@keyframes fade-in-up {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-fade-in-up {
-  animation: fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-/* Mobile-specific utilities */
-.scrollbar-hide::-webkit-scrollbar {
-  display: none;
-}
-.scrollbar-hide {
-  -ms-overflow-style: none;  /* IE and Edge */
-  scrollbar-width: none;  /* Firefox */
-}
-
-@keyframes slide-up {
-  from {
-    transform: translateY(100%);
-  }
-  to {
-    transform: translateY(0);
-  }
-}
-
-.animate-slide-up {
-  animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-/* Safe area bottom padding for notch devices */
-.safe-bottom-padding {
-  padding-bottom: calc(env(safe-area-inset-bottom) + 0.75rem) !important;
-}
-
-/* ─────────────────────────────────────────────────────────────────────────
-   Jellycut Professional Redesigned Theme — Clean design system variables
-   ───────────────────────────────────────────────────────────────────────── */
+/* Base theme tokens */
 :root {
-  --bg-base: #111113;
-  --bg-surface: #18181b;
-  --bg-elevated: #202024;
-  --bg-overlay: #27272a;
+  --bg-base: #0a0a0c;
+  --bg-surface: #121215;
+  --bg-elevated: #18181c;
+  --bg-overlay: #222226;
   
-  --border-subtle: #27272a;
-  --border-default: #3f3f46;
+  --border-subtle: #1c1c21;
+  --border-default: #27272a;
+  --border-active: #ffffff;
   
-  --text-primary: #f4f4f5;
+  --text-primary: #ffffff;
   --text-secondary: #a1a1aa;
   --text-muted: #71717a;
   
-  --accent-violet: #7c3aed;
-  --accent-violet-hover: #6d28d9;
-  --accent-blue: #0ea5e9;
-  --accent-blue-hover: #0284c7;
-  --accent-emerald: #10b981;
+  --accent-white: #ffffff;
+  --accent-gray: #e4e4e7;
 }
 
 /* Premium Dashboard Base Layout */
@@ -399,11 +282,11 @@ input[type="range"]::-moz-range-thumb:hover {
 
 /* Hero CTA Card */
 .hero-cta-card {
-  background: linear-gradient(135deg, rgba(124, 58, 237, 0.8) 0%, rgba(14, 165, 233, 0.8) 100%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  background: linear-gradient(135deg, rgba(30, 30, 35, 0.9) 0%, rgba(15, 15, 18, 0.95) 100%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
   border-radius: 20px !important;
   padding: 40px 32px !important;
-  box-shadow: 0 16px 32px rgba(124, 58, 237, 0.15) !important;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.4) !important;
   position: relative;
   overflow: hidden;
   transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
@@ -411,8 +294,8 @@ input[type="range"]::-moz-range-thumb:hover {
 
 .hero-cta-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 24px 48px rgba(124, 58, 237, 0.25) !important;
-  border-color: rgba(255, 255, 255, 0.2) !important;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.6) !important;
+  border-color: rgba(255, 255, 255, 0.25) !important;
 }
 
 /* Horizontal scroll custom styling */

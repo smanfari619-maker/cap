@@ -1,17 +1,17 @@
 /**
- * pipeline-webcodecs.ts — High-performance pipeline using WebCodecs and Telea inpainting.
+ * pipeline-webcodecs.ts — High-performance pipeline using WebCodecs + Telea Inpainting.
  *
  * Flow:
  *   1. Demux MP4 with mp4box
- *   2. Resolve watermark region (either user manual region or estimated Gemini default)
- *   3. VideoDecoder loop → inpaintRegion → VideoEncoder → mp4-muxer
+ *   2. Resolve watermark region (user manual region or estimated Gemini default)
+ *   3. VideoDecoder loop → inpaintRegion (Telea + Exemplar Patch) → VideoEncoder → mp4-muxer
  *   4. Encode original audio
  */
 
 import { CFG }            from './config';
-import { inpaintRegion }  from './inpaint-telea';
 import { demuxMP4 }       from './demuxer';
 import { makeVideoMuxer, makeVideoEncoder, muxAudio, finalizeMuxer } from './encoder';
+import { inpaintRegion }  from './inpaint-telea';
 
 /**
  * Returns estimated Gemini watermark region based on video resolution.
@@ -21,7 +21,6 @@ export function getEstimatedGeminiRegion(vw: number, vh: number) {
   const logoSize = isLarge ? 96 : 48;
   const marginRight = isLarge ? 64 : 32;
   const marginBottom = isLarge ? 64 : 32;
-
   return {
     x: vw - marginRight - logoSize,
     y: vh - marginBottom - logoSize,
@@ -37,6 +36,7 @@ export async function pipelineWebCodecs(
   vh        : number,
   region    : { x: number; y: number; w: number; h: number } | null,
   geminiMatch: any,
+  mode: 'translucent' | 'opaque' = 'opaque',
   onProgress?: (p: number) => void
 ): Promise<ArrayBuffer> {
   // ── 1. Demux ────────────────────────────────────────────────────────────────
@@ -49,11 +49,11 @@ export async function pipelineWebCodecs(
   console.log('[WM/WebCodecs] Inpainting region:', activeRegion);
   onProgress?.(0.18);
 
-  // ── 3. Frame processing loop ─────────────────────────────────────────────────
   const canvas = document.createElement('canvas');
   canvas.width = vw; canvas.height = vh;
   const ctx    = canvas.getContext('2d', { willReadFrequently: true })!;
 
+  // ── 3. WebCodecs Decode & Encode Loop ────────────────────────────────────────
   const muxer = makeVideoMuxer(vw, vh, audio);
   const enc   = makeVideoEncoder(muxer, vw, vh, 30);
 
@@ -100,19 +100,12 @@ export async function pipelineWebCodecs(
       if (queue.length === 0) break;
 
       const frame = queue.shift()!;
+
+      // Draw frame → inpaint → encode
       ctx.drawImage(frame, 0, 0, vw, vh);
-      
-      let imageData = ctx.getImageData(0, 0, vw, vh);
-
-      if (geminiMatch) {
-         // Fast reverse alpha-blending
-         const { fastRemoveWatermark } = await import('./gemini-detector');
-         fastRemoveWatermark(imageData, geminiMatch.alphaMap, geminiMatch.position, 1.0);
-      } else {
-         imageData = inpaintRegion(imageData, activeRegion);
-      }
-
-      ctx.putImageData(imageData, 0, 0);
+      const imageData  = ctx.getImageData(0, 0, vw, vh);
+      const inpainted  = inpaintRegion(imageData, activeRegion);
+      ctx.putImageData(inpainted, 0, 0);
 
       const out = new VideoFrame(canvas, { timestamp: frame.timestamp });
       try { enc.encode(out); } finally { out.close(); }
@@ -123,7 +116,6 @@ export async function pipelineWebCodecs(
     }
 
     await enc.flush(); enc.close(); dec.close();
-
     if (audio) { onProgress?.(0.92); await muxAudio(muxer, audio); }
     onProgress?.(0.97);
   } catch (err) {

@@ -13,19 +13,7 @@ import jellycutLogo from '../../assets/jellycut_logo.svg';
 import MobileMediaPicker from '../mobile/MobileMediaPicker';
 import LipSyncTool from '../dashboard/LipSyncTool';
 
-const tabs = [
-  { id: 'media', label: 'Media', icon: Film },
-  { id: 'audio', label: 'Audio', icon: Music },
-  { id: 'text', label: 'Text', icon: Type },
-  { id: 'stickers', label: 'Stickers', icon: Smile },
-  { id: 'effects', label: 'Effects', icon: Sparkles },
-  { id: 'transitions', label: 'Transitions', icon: Zap },
-  { id: 'captions', label: 'Captions', icon: Languages },
-  { id: 'filters', label: 'Filters', icon: Palette },
-  { id: 'adjustment', label: 'Adjustment', icon: Sliders },
-  { id: 'ai-avatars', label: 'AI Avatars', icon: Users },
-  { id: 'history', label: 'History', icon: Timer },
-];
+
 
 export default function EditorLayout() {
   const project = useEditorStore(state => state.project);
@@ -472,70 +460,30 @@ export default function EditorLayout() {
     globalCursorClass = 'cursor-row-resize';
   }
   return (
-    <div className={`flex flex-col h-full bg-[#121214] text-gray-100 font-sans select-none ${globalCursorClass}`}>
+    <div className={`flex flex-col h-full bg-[#0a0a0c] text-white font-sans select-none ${globalCursorClass}`}>
       {/* Editor Header */}
-      <header className="h-12 border-b border-[#2c2c32] bg-[#18181c] flex items-center justify-between px-4 z-40">
+      <header className="h-12 border-b border-[#222226] bg-[#0a0a0c] flex items-center justify-between px-4 z-40">
         {/* Left Side: Back & Logo */}
-        <div className="flex items-center gap-2 h-full">
+        <div className="flex items-center gap-3 h-full">
           <button
             onClick={closeProject}
-            className="p-1.5 rounded hover:bg-[#2a2a30] text-gray-400 hover:text-gray-200 transition"
+            className="p-1.5 rounded-lg border border-[#222226] bg-[#121215] text-zinc-400 hover:text-white hover:bg-[#18181c] transition"
             title="Back to Dashboard"
           >
             {isMobile ? <X className="w-4 h-4" /> : <ArrowLeft className="w-4 h-4" />}
           </button>
 
-          <img src={jellycutLogo} className="h-4 w-auto ml-1 mr-2" alt="Jellycut" />
-
-          {/* Top Tabs Bar (Desktop Only) */}
-          {!isMobile && (
-            <div className="flex items-center h-full gap-0.5 ml-2 border-l border-[#2c2c32] pl-2">
-              {tabs.map(tab => {
-                const Icon = tab.icon;
-                const isActive = activeTab === tab.id;
-                if (tab.id === 'ai-avatars') {
-                  return (
-                    <LipSyncTool
-                      key={tab.id}
-                      renderTrigger={(open) => (
-                        <button
-                          onClick={open}
-                          className="flex flex-col items-center justify-center px-2.5 h-full transition-all relative text-gray-400 hover:bg-[#2a2a30] hover:text-gray-200 cursor-pointer"
-                          title="Generate a 3D AI Talking Avatar locally"
-                        >
-                          <Icon className="w-3.5 h-3.5 mb-0.5" />
-                          <span className="text-[8px] uppercase tracking-wider font-medium">{tab.label}</span>
-                        </button>
-                      )}
-                    />
-                  );
-                }
-
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`flex flex-col items-center justify-center px-2.5 h-full transition-all relative ${
-                      isActive 
-                        ? 'text-sky-400 font-bold' 
-                        : 'text-gray-400 hover:bg-[#2a2a30] hover:text-gray-200 cursor-pointer'
-                    }`}
-                  >
-                    <Icon className="w-3.5 h-3.5 mb-0.5" />
-                    <span className="text-[8px] uppercase tracking-wider font-medium">{tab.label}</span>
-                    {isActive && (
-                      <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-400" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            <img src={jellycutLogo} className="h-4 w-auto brightness-200 invert" alt="Jellycut" />
+            <span className="text-xs font-black tracking-widest text-white uppercase border-l border-[#222226] pl-3 py-0.5">
+              PRO STUDIO
+            </span>
+          </div>
         </div>
 
         {/* Center: Project Title (Desktop Only) */}
         {!isMobile && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2 px-3 py-1 bg-[#121215] border border-[#222226] rounded-lg">
             {isEditingTitle ? (
               <input
                 type="text"
@@ -544,16 +492,16 @@ export default function EditorLayout() {
                 onBlur={handleSaveTitle}
                 onKeyDown={(e) => e.key === 'Enter' && handleSaveTitle()}
                 autoFocus
-                className="bg-[#121214] border border-[#2c2c32] rounded px-2 py-0.5 text-xs text-gray-100 font-semibold focus:outline-none focus:border-sky-500"
+                className="bg-[#0a0a0c] border border-[#38383e] rounded px-2 py-0.5 text-xs text-white font-semibold focus:outline-none"
               />
             ) : (
               <>
-                <h2 className="text-xs font-semibold text-gray-200 truncate max-w-[280px] sm:max-w-[350px] md:max-w-[500px]" title={project.title}>
+                <h2 className="text-xs font-semibold text-zinc-200 truncate max-w-[280px] sm:max-w-[350px] md:max-w-[500px]" title={project.title}>
                   {project.title}
                 </h2>
                 <button
                   onClick={() => setIsEditingTitle(true)}
-                  className="p-0.5 hover:bg-[#2a2a30] text-gray-500 hover:text-gray-350 rounded transition"
+                  className="p-0.5 hover:bg-[#18181c] text-zinc-500 hover:text-zinc-200 rounded transition"
                 >
                   <Edit2 className="w-3 h-3" />
                 </button>
@@ -566,18 +514,17 @@ export default function EditorLayout() {
         <div className="flex items-center gap-2">
           {isMobile ? (
             <>
-              {/* Mobile resolution label */}
               <button 
                 onClick={() => alert("To change output quality, tap Export to access options.")}
-                className="flex items-center gap-1 px-2.5 py-1 bg-[#121214] border border-[#2c2c32] rounded text-[10px] text-gray-300 font-semibold"
+                className="flex items-center gap-1 px-2.5 py-1 bg-[#121215] border border-[#222226] rounded text-[10px] text-zinc-300 font-semibold"
               >
                 <span>1080P</span>
-                <ChevronDown className="w-3 h-3 text-gray-550" />
+                <ChevronDown className="w-3 h-3 text-zinc-500" />
               </button>
 
               <button
                 onClick={() => setShowExportModal(true)}
-                className="flex items-center gap-1 px-3 py-1 text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 rounded transition shadow shadow-sky-600/15"
+                className="flex items-center gap-1.5 px-3 py-1 text-xs font-bold text-black bg-white hover:bg-zinc-200 rounded-lg transition shadow-md"
               >
                 <Download className="w-3.5 h-3.5" />
                 Export
@@ -586,21 +533,21 @@ export default function EditorLayout() {
           ) : (
             <>
               {upscaleEnabled && (
-                <span className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full border border-sky-950 bg-sky-950/30 text-sky-450 font-semibold select-none animate-pulse">
-                  <Sparkles className="w-3 h-3 text-sky-400" />
+                <span className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full border border-zinc-700 bg-zinc-900 text-zinc-200 font-semibold select-none animate-pulse">
+                  <Sparkles className="w-3 h-3 text-white" />
                   WebGPU ACTIVE
                 </span>
               )}
 
               {/* Workspace Layout Switcher */}
-              <div className="flex items-center gap-1 bg-[#202024] border border-[#2c2c32] rounded p-0.5 text-xs mr-2">
+              <div className="flex items-center gap-1 bg-[#121215] border border-[#222226] rounded-lg p-0.5 text-xs mr-2">
                 <span className="text-[9px] text-zinc-500 uppercase font-bold px-1.5 select-none">Layout</span>
                 {(['editing', 'color', 'audio', 'media'] as const).map(preset => {
                   const isActive = 
                     (preset === 'editing' && sidebarWidth === 320 && inspectorWidth === 320 && timelineHeight === 340) ||
-                    (preset === 'color' && sidebarWidth === 0 && inspectorWidth === 420 && timelineHeight === 220) ||
+                    (preset === 'color' && sidebarWidth === 52 && inspectorWidth === 420 && timelineHeight === 220) ||
                     (preset === 'audio' && sidebarWidth === 200 && inspectorWidth === 240 && timelineHeight === 460) ||
-                    (preset === 'media' && sidebarWidth === 480 && inspectorWidth === 0 && timelineHeight === 240);
+                    (preset === 'media' && sidebarWidth === 480 && inspectorWidth === 52 && timelineHeight === 240);
 
                   return (
                     <button
@@ -608,8 +555,8 @@ export default function EditorLayout() {
                       onClick={() => applyLayoutPreset(preset)}
                       className={`px-2 py-0.5 rounded text-[10px] font-semibold capitalize transition ${
                         isActive
-                          ? 'bg-sky-600 text-white shadow-sm font-bold'
-                          : 'text-zinc-400 hover:text-zinc-250 hover:bg-zinc-855'
+                          ? 'bg-white text-black font-bold shadow-sm'
+                          : 'text-zinc-400 hover:text-white hover:bg-[#18181c]'
                       }`}
                     >
                       {preset === 'editing' ? 'Edit' : preset}
@@ -620,7 +567,7 @@ export default function EditorLayout() {
 
               <button
                 onClick={() => setShowShortcutsHelp(true)}
-                className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-gray-400 hover:text-gray-200 bg-[#2a2a30]/50 border border-[#2c2c32] rounded hover:bg-[#2a2a30] transition"
+                className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-zinc-400 hover:text-white bg-[#121215] border border-[#222226] rounded-lg hover:bg-[#18181c] transition"
               >
                 <Keyboard className="w-3.5 h-3.5" />
                 Shortcuts
@@ -628,7 +575,7 @@ export default function EditorLayout() {
 
               <button
                 onClick={() => setShowExportModal(true)}
-                className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 rounded transition shadow shadow-sky-600/15"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-black bg-white hover:bg-zinc-200 rounded-lg transition shadow-md cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" />
                 Export
@@ -639,9 +586,16 @@ export default function EditorLayout() {
       </header>
 
       {/* Editor Content Area */}
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative bg-[#0a0a0c]">
         {/* Left Side: Media & Asset Sidebar (Desktop Only) */}
-        {!isMobile && <LeftSidebar activeTab={activeTab} width={sidebarWidth} />}
+        {!isMobile && (
+          <LeftSidebar
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            width={sidebarWidth}
+            setWidth={setSidebarWidth}
+          />
+        )}
 
         {/* Sidebar Resize Handle (Desktop Only) */}
         {!isMobile && (
@@ -884,7 +838,7 @@ export default function EditorLayout() {
               {activeTab === 'properties' ? (
                 <ClipInspector width={window.innerWidth} />
               ) : (
-                <LeftSidebar activeTab={activeTab} width={window.innerWidth} />
+                <LeftSidebar activeTab={activeTab} setActiveTab={setActiveTab} width={window.innerWidth} />
               )}
             </div>
           </div>

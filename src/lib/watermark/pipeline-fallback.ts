@@ -2,13 +2,14 @@
  * pipeline-fallback.ts — Seek-based pipeline for containers mp4box cannot demux.
  *
  * Uses HTMLVideoElement.currentTime seeks to extract frames.
- * Slower than WebCodecs (one seek per frame) but universally compatible.
+ * Slower than WebCodecs but universally compatible.
+ * Applies Telea + Exemplar Patch inpainting to every frame.
  */
 
 import { CFG }                  from './config';
-import { inpaintRegion }        from './inpaint-telea';
 import { getEstimatedGeminiRegion } from './pipeline-webcodecs';
 import { makeVideoMuxer, makeVideoEncoder, muxAudio, finalizeMuxer } from './encoder';
+import { inpaintRegion } from './inpaint-telea';
 
 export async function pipelineFallback(
   file      : File,
@@ -17,6 +18,7 @@ export async function pipelineFallback(
   vh        : number,
   region    : { x: number; y: number; w: number; h: number } | null,
   geminiMatch: any,
+  mode: 'translucent' | 'opaque' = 'opaque',
   onProgress?: (p: number) => void
 ): Promise<ArrayBuffer> {
   // ── Set up video element ───────────────────────────────────────────────────
@@ -52,18 +54,11 @@ export async function pipelineFallback(
         video.currentTime = i / fps;
       });
 
+      // Draw → inpaint → encode
       ctx.drawImage(video, 0, 0, vw, vh);
-      let imageData = ctx.getImageData(0, 0, vw, vh);
-
-      if (geminiMatch) {
-         // Fast reverse alpha-blending
-         const { fastRemoveWatermark } = await import('./gemini-detector');
-         fastRemoveWatermark(imageData, geminiMatch.alphaMap, geminiMatch.position, 1.0);
-      } else {
-         imageData = inpaintRegion(imageData, activeRegion);
-      }
-      
-      ctx.putImageData(imageData, 0, 0);
+      const imageData = ctx.getImageData(0, 0, vw, vh);
+      const inpainted = inpaintRegion(imageData, activeRegion);
+      ctx.putImageData(inpainted, 0, 0);
 
       const frame = new VideoFrame(canvas, { timestamp: (i * 1_000_000) / fps });
       try { enc.encode(frame); } finally { frame.close(); }

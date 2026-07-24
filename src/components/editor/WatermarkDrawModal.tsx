@@ -273,7 +273,7 @@ export default function WatermarkDrawModal({
             <button
               onClick={handleConfirm}
               disabled={!hasDrawn}
-              className="px-4 py-1.5 rounded-lg text-xs font-bold bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white transition disabled:cursor-not-allowed"
+              className="px-4 py-1.5 rounded-lg text-xs font-bold bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-600 text-black transition disabled:cursor-not-allowed"
             >
               Confirm Region
             </button>

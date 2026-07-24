@@ -117,7 +117,7 @@ export default function ClipFadeHandles({
         onPointerDown={(e) => handlePointerDown(e, 'in')}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        className={`absolute w-3 h-3 bg-white border-2 border-violet-500 rounded-full cursor-col-resize pointer-events-auto transform -translate-x-1/2 shadow-md hover:scale-125 transition-transform z-35`}
+        className={`absolute w-3 h-3 bg-white border-2 border-black bg-white rounded-full cursor-col-resize pointer-events-auto transform -translate-x-1/2 shadow-md hover:scale-125 transition-transform z-35`}
         style={{ left: `${fadeInWidth}px`, top: '4px' }}
         title={`Fade In: ${Math.round(localFadeIn)}ms (Drag left/right to adjust)`}
       />
@@ -127,7 +127,7 @@ export default function ClipFadeHandles({
         onPointerDown={(e) => handlePointerDown(e, 'out')}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        className={`absolute w-3 h-3 bg-white border-2 border-violet-500 rounded-full cursor-col-resize pointer-events-auto transform -translate-x-1/2 shadow-md hover:scale-125 transition-transform z-35`}
+        className={`absolute w-3 h-3 bg-white border-2 border-black bg-white rounded-full cursor-col-resize pointer-events-auto transform -translate-x-1/2 shadow-md hover:scale-125 transition-transform z-35`}
         style={{ left: `${width - fadeOutWidth}px`, top: '4px' }}
         title={`Fade Out: ${Math.round(localFadeOut)}ms (Drag left/right to adjust)`}
       />

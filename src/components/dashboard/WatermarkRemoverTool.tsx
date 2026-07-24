@@ -22,9 +22,10 @@ import { removeWatermarkFromVideoFile, removeWatermarkFromImageDataSync } from '
 async function processVideoFast(
   file: File,
   region: { x: number; y: number; w: number; h: number } | null,
+  mode: 'translucent' | 'opaque',
   onProgress: (pct: number, label: string) => void
 ): Promise<Blob> {
-  const arrayBuffer = await removeWatermarkFromVideoFile(file, region, (pct) => {
+  const arrayBuffer = await removeWatermarkFromVideoFile(file, region, mode, (pct) => {
     const val = Math.round(pct * 100);
     onProgress(val, `Processing… ${val}%`);
   });
@@ -99,8 +100,9 @@ function BeforeAfterPreview({ origUrl, resultUrl, isVideo }: {
                   : <img src={url} className="w-full h-full object-contain" alt={label} />
                 )
               : <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
-                  <Sparkles className="w-8 h-8 text-zinc-700 animate-pulse" />
-                  <span className="text-[10px] text-zinc-600 font-medium">Awaiting processing…</span>
+                  <Sparkles className="w-8 h-8 text-zinc-700" />
+                  <span className="text-[10px] text-zinc-600 font-medium">Ready to process</span>
+                  <span className="text-[9px] text-zinc-700">Click button below</span>
                 </div>
             }
           </div>
@@ -130,6 +132,7 @@ export default function WatermarkRemoverTool({ renderTrigger }: WatermarkRemover
   // Bounding box selection state
   const [customRegion, setCustomRegion] = useState<{ x: number; y: number; w: number; h: number; maskData?: Uint8Array } | null>(null);
   const [showDrawModal, setShowDrawModal] = useState(false);
+  const [mode, setMode] = useState<'translucent' | 'opaque'>('opaque');
 
   // Image
   const [imgFile,      setImgFile]      = useState<File | null>(null);
@@ -146,6 +149,8 @@ export default function WatermarkRemoverTool({ renderTrigger }: WatermarkRemover
   const [vidPct,       setVidPct]       = useState(0);
   const [vidLabel,     setVidLabel]     = useState('');
   const [vidError,     setVidError]     = useState<string | null>(null);
+
+  // Auto Detect State
 
   useEffect(() => () => {
     [imgOrigUrl, imgResult?.url, vidOrigUrl, vidResult?.url]
@@ -219,7 +224,7 @@ export default function WatermarkRemoverTool({ renderTrigger }: WatermarkRemover
     if (!vidFile) return;
     setVidBusy(true); setVidError(null); setVidPct(0); setVidLabel('Starting…');
     try {
-      const blob = await processVideoFast(vidFile, customRegion, (pct, label) => {
+      const blob = await processVideoFast(vidFile, customRegion, mode, (pct, label) => {
         setVidPct(pct); setVidLabel(label);
       });
       const base = vidFile.name.replace(/\.[^.]+$/, '');
@@ -268,23 +273,23 @@ export default function WatermarkRemoverTool({ renderTrigger }: WatermarkRemover
                   <BeforeAfterPreview origUrl={imgOrigUrl!} resultUrl={imgResult?.url ?? null} isVideo={false} />
                   
                   {/* Custom Region controls */}
-                  <div className="flex items-center justify-between p-3 rounded-xl border border-zinc-800 bg-zinc-900/10">
+                  <div className="flex items-center justify-between p-3 rounded-xl border border-zinc-800 bg-zinc-900/10 flex-wrap gap-2">
                     <div className="flex flex-col gap-0.5">
                       <span className="text-[10px] font-bold text-zinc-400">Inpainting Mode</span>
                       <span className="text-[11px] text-zinc-500">
                         {customRegion 
                           ? `Custom Box: ${customRegion.x}, ${customRegion.y} (${customRegion.w}x${customRegion.h}px)`
-                          : 'Auto Detect (Estimates bottom-right Gemini logo)'
+                          : 'Draw a custom region to remove'
                         }
                       </span>
                     </div>
-                    <div className="flex gap-1.5">
+                    <div className="flex gap-1.5 flex-wrap items-center">
                       <button
                         onClick={() => setShowDrawModal(true)}
                         className="px-3 py-1.5 rounded-lg text-[10px] font-bold border border-zinc-700 hover:border-zinc-600 bg-zinc-850 hover:bg-zinc-800 text-zinc-350 transition cursor-pointer"
                         disabled={imgBusy}
                       >
-                        {customRegion ? 'Redraw Box' : 'Draw Custom Region'}
+                        {customRegion ? 'Redraw Box' : 'Draw Region'}
                       </button>
                       {customRegion && (
                         <button
@@ -322,24 +327,26 @@ export default function WatermarkRemoverTool({ renderTrigger }: WatermarkRemover
               : <>
                   <BeforeAfterPreview origUrl={vidOrigUrl!} resultUrl={vidResult?.url ?? null} isVideo />
                   
+
+
                   {/* Custom Region controls */}
-                  <div className="flex items-center justify-between p-3 rounded-xl border border-zinc-800 bg-zinc-900/10">
+                  <div className="flex items-center justify-between p-3 rounded-xl border border-zinc-800 bg-zinc-900/10 flex-wrap gap-2">
                     <div className="flex flex-col gap-0.5">
                       <span className="text-[10px] font-bold text-zinc-400">Inpainting Mode</span>
                       <span className="text-[11px] text-zinc-500">
                         {customRegion 
                           ? `Custom Box: ${customRegion.x}, ${customRegion.y} (${customRegion.w}x${customRegion.h}px)`
-                          : 'Auto Detect (Estimates bottom-right Gemini logo)'
+                          : 'Draw a custom region to remove'
                         }
                       </span>
                     </div>
-                    <div className="flex gap-1.5">
+                    <div className="flex gap-1.5 flex-wrap items-center">
                       <button
                         onClick={() => setShowDrawModal(true)}
                         className="px-3 py-1.5 rounded-lg text-[10px] font-bold border border-zinc-700 hover:border-zinc-600 bg-zinc-850 hover:bg-zinc-800 text-zinc-350 transition cursor-pointer"
                         disabled={vidBusy}
                       >
-                        {customRegion ? 'Redraw Box' : 'Draw Custom Region'}
+                        {customRegion ? 'Redraw Box' : 'Draw Region'}
                       </button>
                       {customRegion && (
                         <button
@@ -441,6 +448,7 @@ export default function WatermarkRemoverTool({ renderTrigger }: WatermarkRemover
         </div>,
         document.body
       )}
+
     </>
   );
 }

@@ -1,17 +1,5 @@
 import Dexie, { type Table } from 'dexie';
 
-// Inline type for the design projects table — matches DesignProject in components/design/types.ts
-export interface DesignProjectRecord {
-  id: string;
-  title: string;
-  category: string;
-  thumbnail?: string;
-  pages: any[];
-  elements: Record<string, any>;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
 export interface Asset {
   id: string;
   projectId: string;
@@ -240,7 +228,6 @@ class CapCutDatabase extends Dexie {
   projects!: Table<Project>;
   assets!: Table<Asset>;
   projectVersions!: Table<ProjectVersion>;
-  designProjects!: Table<DesignProjectRecord>;
 
   constructor() {
     super('CapCutDatabase');
@@ -276,6 +263,10 @@ class CapCutDatabase extends Dexie {
       assets: 'id, projectId, type, createdAt',
       projectVersions: 'id, projectId, createdAt',
       designProjects: 'id, title, category, createdAt, updatedAt',
+    });
+    // Version 7: removes designProjects table
+    this.version(7).stores({
+      designProjects: null // null deletes the table
     });
   }
 }

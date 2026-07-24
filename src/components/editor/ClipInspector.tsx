@@ -285,41 +285,41 @@ export default function ClipInspector({ width }: { width: number }) {
       {/* Inspector Header */}
       <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Sliders className="w-4 h-4 text-violet-400" />
+          <Sliders className="w-4 h-4 text-zinc-400" />
           <h3 className="font-bold text-sm">Clip Inspector</h3>
         </div>
       </div>
 
-      {/* Tabs Switcher for Video/Audio clips matching CapCut */}
-      {selectedClip.type !== 'text' && (
-        <div className="flex border-b border-zinc-800 px-2 py-1 gap-1 text-[10px] font-semibold bg-zinc-950/20">
+      {/* Tab Header for Video/Image Clips */}
+      {selectedClip.type !== 'text' && selectedClip.type !== 'effect' && (
+        <div className="flex border-b border-[#222226] bg-[#0a0a0c] p-1.5 gap-1 text-[11px] font-medium">
           <button
             onClick={() => setActiveTab('video')}
-            className={`flex-1 py-1 rounded transition text-center ${activeTab === 'video' ? 'bg-zinc-800 text-violet-400 font-bold' : 'text-zinc-400 hover:text-zinc-200'}`}
+            className={`flex-1 py-1 rounded-md transition text-center ${activeTab === 'video' ? 'bg-white text-black font-bold shadow-sm' : 'text-zinc-400 hover:text-white'}`}
           >
             Video
           </button>
           <button
             onClick={() => setActiveTab('audio')}
-            className={`flex-1 py-1 rounded transition text-center ${activeTab === 'audio' ? 'bg-zinc-800 text-violet-400 font-bold' : 'text-zinc-400 hover:text-zinc-200'}`}
+            className={`flex-1 py-1 rounded-md transition text-center ${activeTab === 'audio' ? 'bg-white text-black font-bold shadow-sm' : 'text-zinc-400 hover:text-white'}`}
           >
             Audio
           </button>
           <button
             onClick={() => setActiveTab('speed')}
-            className={`flex-1 py-1 rounded transition text-center ${activeTab === 'speed' ? 'bg-zinc-800 text-violet-400 font-bold' : 'text-zinc-400 hover:text-zinc-200'}`}
+            className={`flex-1 py-1 rounded-md transition text-center ${activeTab === 'speed' ? 'bg-white text-black font-bold shadow-sm' : 'text-zinc-400 hover:text-white'}`}
           >
             Speed
           </button>
           <button
             onClick={() => setActiveTab('adjust')}
-            className={`flex-1 py-1 rounded transition text-center ${activeTab === 'adjust' ? 'bg-zinc-800 text-violet-400 font-bold' : 'text-zinc-400 hover:text-zinc-200'}`}
+            className={`flex-1 py-1 rounded-md transition text-center ${activeTab === 'adjust' ? 'bg-white text-black font-bold shadow-sm' : 'text-zinc-400 hover:text-white'}`}
           >
             Adjust
           </button>
           <button
             onClick={() => setActiveTab('effects')}
-            className={`flex-1 py-1 rounded transition text-center ${activeTab === 'effects' ? 'bg-zinc-800 text-violet-400 font-bold' : 'text-zinc-400 hover:text-zinc-200'}`}
+            className={`flex-1 py-1 rounded-md transition text-center ${activeTab === 'effects' ? 'bg-white text-black font-bold shadow-sm' : 'text-zinc-400 hover:text-white'}`}
           >
             Effects
           </button>

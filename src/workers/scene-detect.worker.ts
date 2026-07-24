@@ -1,5 +1,62 @@
 import { createFile, DataStream, Endianness } from 'mp4box';
 
+// ─── WASM Scene Diff Module ───────────────────────────────────────────────────
+// Loaded once per worker lifetime. Falls back to JS if unavailable.
+
+interface SceneDiffWasm {
+  diff_frames(a: Uint8Array, b: Uint8Array): number;
+}
+
+let sceneDiffWasm: SceneDiffWasm | null = null;
+
+async function loadSceneDiffWasm(): Promise<SceneDiffWasm | null> {
+  try {
+    // Dynamic import of the wasm-pack generated JS glue
+    // @ts-ignore — /wasm/ paths are Vite static assets, not TS modules
+    const mod = await import(/* @vite-ignore */ '/wasm/scene_diff/scene_diff.js') as any;
+    if (typeof mod.default === 'function') {
+      await mod.default(); // initialise the WASM module
+    }
+    console.debug('[SceneDetect Worker] scene_diff.wasm loaded ✓');
+    return mod as SceneDiffWasm;
+  } catch (err) {
+    console.warn('[SceneDetect Worker] scene_diff.wasm unavailable, using JS fallback:', err);
+    return null;
+  }
+}
+
+/**
+ * Compute mean absolute pixel difference between two RGBA frame buffers.
+ * Uses WASM fast path when available, JS fallback otherwise.
+ */
+function diffFrames(
+  a: Uint8ClampedArray,
+  b: Uint8ClampedArray,
+  wasm: SceneDiffWasm | null
+): number {
+  if (wasm) {
+    // wasm-bindgen expects Uint8Array — create a zero-copy view
+    const aU8 = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+    const bU8 = new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+    return wasm.diff_frames(aU8, bU8);
+  }
+
+  // Pure JS fallback (matches original algorithm exactly)
+  if (a.length !== b.length || a.length === 0) return 0;
+  let total = 0;
+  let count = 0;
+  for (let i = 0; i < a.length; i += 4) {
+    const rDiff = Math.abs(a[i] - b[i]);
+    const gDiff = Math.abs(a[i + 1] - b[i + 1]);
+    const bDiff = Math.abs(a[i + 2] - b[i + 2]);
+    total += (rDiff + gDiff + bDiff) / 3;
+    count++;
+  }
+  return count > 0 ? total / count : 0;
+}
+
+// ─── MP4 Demuxer ─────────────────────────────────────────────────────────────
+
 function demuxMP4(arrayBuffer: ArrayBuffer): Promise<any> {
   return new Promise((resolve, reject) => {
     const mp4file = createFile();
@@ -90,10 +147,24 @@ function demuxMP4(arrayBuffer: ArrayBuffer): Promise<any> {
   });
 }
 
+// ─── Worker Entry Point ───────────────────────────────────────────────────────
+
 self.onmessage = async (e) => {
   const { arrayBuffer } = e.data;
+
+  // Load WASM diff module in parallel with MP4 demuxing
+  const [wasmMod, demuxed] = await Promise.all([
+    loadSceneDiffWasm(),
+    demuxMP4(arrayBuffer).catch((err) => {
+      self.postMessage({ type: 'error', error: err.message || String(err) });
+      return null;
+    })
+  ]);
+
+  if (!demuxed) return;
+
   try {
-    const demuxed = await demuxMP4(arrayBuffer);
+    sceneDiffWasm = wasmMod;
     const { codec, width, height, timescale, description, samples } = demuxed;
     
     const cuts: number[] = [];
@@ -117,14 +188,8 @@ self.onmessage = async (e) => {
           const data = imgData.data;
 
           if (prevData) {
-            let diffSum = 0;
-            for (let i = 0; i < data.length; i += 4) {
-              const rDiff = Math.abs(data[i] - prevData[i]);
-              const gDiff = Math.abs(data[i+1] - prevData[i+1]);
-              const bDiff = Math.abs(data[i+2] - prevData[i+2]);
-              diffSum += (rDiff + gDiff + bDiff) / 3;
-            }
-            const averageDiff = diffSum / (canvas.width * canvas.height);
+            // ── WASM fast path ────────────────────────────────────────────
+            const averageDiff = diffFrames(data, prevData, sceneDiffWasm);
             if (averageDiff > 28) {
               cuts.push(timestampUs / 1000);
             }

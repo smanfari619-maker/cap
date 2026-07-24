@@ -85,8 +85,9 @@ function BeforeAfterPreview({ origUrl, resultUrl, isVideo, bgMode, bgColor, bgIm
                     : <img src={url} className="w-full h-full object-contain" alt={label} />
                   )
                 : <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
-                    <Sparkles className="w-8 h-8 text-zinc-700 animate-pulse" />
-                    <span className="text-[10px] text-zinc-650 font-medium">Awaiting processing…</span>
+                    <Sparkles className="w-8 h-8 text-zinc-700" />
+                    <span className="text-[10px] text-zinc-650 font-medium">Ready to process</span>
+                    <span className="text-[9px] text-zinc-700">Click button below</span>
                   </div>
               }
             </div>

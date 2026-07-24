@@ -26,15 +26,79 @@ export async function mixAudioTracks(project: Project, sampleRate = 44100): Prom
 
   if (maxTimeMs === 0) return null;
 
-  // 2. Create OfflineAudioContext
-  const totalLength = Math.max(sampleRate, Math.round((sampleRate * maxTimeMs) / 1000));
+  // 2. Determine if we can use the WASM fast-path (no complex EQs)
+  const canUseWasm = audioVideoClips.every(({ clip }) => !clip.audioEQ);
+  const totalSamples = Math.max(sampleRate, Math.round((sampleRate * maxTimeMs) / 1000));
+  const baseAudioCtx = new AudioContext({ sampleRate });
+
+  if (canUseWasm) {
+    try {
+      const wasmInputs: any[] = [];
+      for (const { clip } of audioVideoClips) {
+        if (!clip.assetId) continue;
+        const asset = await db.assets.get(clip.assetId);
+        if (!asset) continue;
+        const file = await getFileFromOPFS(asset.opfsPath);
+        if (file.size > 100 * 1024 * 1024 && file.type.startsWith('video/')) continue;
+        
+        const arrayBuffer = await file.arrayBuffer();
+        const decodedBuffer = await baseAudioCtx.decodeAudioData(arrayBuffer);
+        
+        // Interleave channels for WASM if stereo
+        const channels = decodedBuffer.numberOfChannels;
+        let samples: Float32Array;
+        if (channels === 1) {
+          samples = decodedBuffer.getChannelData(0);
+        } else {
+          const l = decodedBuffer.getChannelData(0);
+          const r = decodedBuffer.getChannelData(1);
+          samples = new Float32Array(l.length * 2);
+          for (let i = 0; i < l.length; i++) {
+            samples[i * 2] = l[i];
+            samples[i * 2 + 1] = r[i];
+          }
+        }
+
+        wasmInputs.push({
+          samples,
+          channels,
+          start_sample: Math.round((clip.positionMs / 1000) * sampleRate),
+          duration_samples: Math.round((clip.durationMs / 1000) * sampleRate),
+          trim_start_sample: Math.round((clip.trimStartMs / 1000) * sampleRate),
+          volume: (clip.volume !== undefined ? clip.volume : 100) / 100,
+          fade_in_samples: Math.round(((clip.fadeInMs || 0) / 1000) * sampleRate),
+          fade_out_samples: Math.round(((clip.fadeOutMs || 0) / 1000) * sampleRate),
+          speed: clip.speed || 1.0
+        });
+      }
+
+      if (wasmInputs.length > 0) {
+        const t0 = performance.now();
+        const mixed = await import('./wasm-bridge').then(m => m.WasmBridge.mixAudio(wasmInputs, totalSamples));
+        if (mixed) {
+          console.debug(`[AudioMixer] WASM mix completed in ${(performance.now() - t0).toFixed(1)}ms`);
+          const outBuffer = baseAudioCtx.createBuffer(2, totalSamples, sampleRate);
+          const outL = outBuffer.getChannelData(0);
+          const outR = outBuffer.getChannelData(1);
+          for (let i = 0; i < totalSamples; i++) {
+            outL[i] = mixed[i * 2];
+            outR[i] = mixed[i * 2 + 1];
+          }
+          baseAudioCtx.close();
+          return outBuffer;
+        }
+      }
+    } catch (err) {
+      console.warn('[AudioMixer] WASM path failed, falling back to OfflineAudioContext:', err);
+    }
+  }
+
+  // 3. Create OfflineAudioContext (Fallback / EQ path)
   const offlineCtx = new OfflineAudioContext({
     numberOfChannels: 2,
-    length: totalLength,
+    length: totalSamples,
     sampleRate
   });
-
-  const baseAudioCtx = new AudioContext({ sampleRate });
   try {
     // 3. Decode and mix each clip
     for (const { clip } of audioVideoClips) {

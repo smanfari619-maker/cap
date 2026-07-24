@@ -26,7 +26,7 @@ export default function PlaybackControls({
   totalDuration,
   assetsLoaded,
   isPlaying,
-  upscaleEnabled,
+  upscaleEnabled: _upscaleEnabled,
   showSafeZone,
   setShowSafeZone,
   compareMode,
@@ -191,8 +191,8 @@ export default function PlaybackControls({
 
       {/* Buttons & Timecode Bar */}
       <div className="flex items-center justify-between w-full px-1.5 relative min-h-7">
-        {/* Left: Desktop Only Timecode (hidden on mobile) */}
-        <div className="hidden md:flex text-xs font-mono text-gray-400 items-center gap-1 select-none">
+        {/* Left: Desktop Only Timecode */}
+        <div className="hidden md:flex text-xs font-mono text-zinc-400 items-center gap-1 select-none">
           {isEditingTimecode ? (
             <input
               type="text"
@@ -216,7 +216,7 @@ export default function PlaybackControls({
                 }
                 setIsEditingTimecode(false);
               }}
-              className="w-20 bg-zinc-950 border border-zinc-800 rounded px-1 py-0.5 text-[10px] font-mono text-white text-center focus:outline-none focus:border-sky-500"
+              className="w-20 bg-[#0a0a0c] border border-[#38383e] rounded px-1 py-0.5 text-[10px] font-mono text-white text-center focus:outline-none"
               autoFocus
             />
           ) : (
@@ -225,37 +225,37 @@ export default function PlaybackControls({
                 setIsEditingTimecode(true);
                 setTimecodeInputVal(formatTimecode(useEditorStore.getState().currentTime));
               }}
-              className="text-gray-250 font-medium hover:text-sky-400 cursor-pointer transition select-none"
+              className="text-zinc-200 font-medium hover:text-white cursor-pointer transition select-none"
               title="Click to input timestamp"
               ref={desktopTimecodeRef}
             >
               {formatTimecode(useEditorStore.getState().currentTime)}
             </span>
           )}
-          <span className="text-gray-600">/</span>
-          <span className="text-gray-500">{formatTimecode(totalDuration)}</span>
+          <span className="text-zinc-600">/</span>
+          <span className="text-zinc-500">{formatTimecode(totalDuration)}</span>
         </div>
 
-        {/* Center: Playback Buttons (compact, left-aligned on mobile, absolute centered on desktop) */}
+        {/* Center: Playback Buttons */}
         <div className="flex items-center gap-3.5 justify-start md:justify-center md:absolute md:left-1/2 md:-translate-x-1/2">
           <button
             onClick={() => stepFrame(-1)}
             title="Previous Frame (Key: ,)"
-            className="p-1 rounded hover:bg-[#2a2a30] text-gray-400 hover:text-gray-200 transition cursor-pointer"
+            className="p-1 rounded-lg hover:bg-[#18181c] text-zinc-400 hover:text-white transition cursor-pointer"
           >
             <SkipBack className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={togglePlay}
             disabled={!assetsLoaded}
-            className="p-2 rounded-full bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white transition shadow shadow-sky-600/10 hover:scale-105 cursor-pointer"
+            className="p-2 rounded-full bg-white hover:bg-zinc-200 disabled:opacity-50 text-black transition shadow-md hover:scale-105 cursor-pointer"
           >
-            {isPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+            {isPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current ml-0.5" />}
           </button>
           <button
             onClick={() => stepFrame(1)}
             title="Next Frame (Key: .)"
-            className="p-1 rounded hover:bg-[#2a2a30] text-gray-400 hover:text-gray-200 transition cursor-pointer"
+            className="p-1 rounded-lg hover:bg-[#18181c] text-zinc-400 hover:text-white transition cursor-pointer"
           >
             <SkipForward className="w-3.5 h-3.5" />
           </button>
@@ -263,21 +263,14 @@ export default function PlaybackControls({
 
         {/* Right: Ratio, Safe Zone, Fullscreen, WebGPU */}
         <div className="flex items-center gap-1.5 relative justify-end">
-          {/* WebGPU Indicator */}
-          {upscaleEnabled && (
-            <span className="hidden sm:inline-flex items-center gap-1 text-[8px] px-1.5 py-0.5 rounded bg-sky-950/40 text-sky-400 border border-sky-900/50 select-none animate-pulse">
-              WebGPU
-            </span>
-          )}
-
           {/* Ratio Dropdown */}
           <div className="relative">
             <button
               onClick={() => setShowRatioDropdown(!showRatioDropdown)}
-              className="flex items-center gap-0.5 px-2 py-0.5 bg-[#121214] border border-[#2c2c32] hover:border-sky-500 rounded text-[9px] text-gray-300 font-semibold transition cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 bg-[#121215] border border-[#222226] hover:border-zinc-500 rounded-md text-[10px] text-zinc-200 font-semibold transition cursor-pointer"
             >
               <span>Ratio: {getAspectName()}</span>
-              <ChevronDown className="w-2.5 h-2.5 text-gray-500" />
+              <ChevronDown className="w-3 h-3 text-zinc-500" />
             </button>
 
             {showRatioDropdown && (
