@@ -12,6 +12,25 @@
   --color-text-muted: #6b7280;
   --color-accent: #00aaff;
   --color-accent-hover: #0088cc;
+  
+  --color-zinc-150: #ececec;
+  --color-zinc-250: #d8d8dc;
+  --color-zinc-350: #b5b5ba;
+  --color-zinc-450: #8a8a93;
+  --color-zinc-550: #62626b;
+  --color-zinc-650: #46464e;
+  --color-zinc-750: #333338;
+  --color-zinc-805: #252528;
+  --color-zinc-850: #1f1f22;
+  --color-zinc-955: #0c0c0e;
+  
+  --color-violet-405: #9c6af2;
+  --color-violet-650: #6d28d9; 
+  --color-violet-850: #3b1875;
+  --color-violet-955: #210d45;
+  
+  --color-red-455: #f65a5a;
+  --color-red-955: #380808;
 }
 
 :root {

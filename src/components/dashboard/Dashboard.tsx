@@ -1040,14 +1040,14 @@ export default function Dashboard() {
           {/* AI Video Generator quick card */}
           <div
             onClick={() => { setActiveView('ai-studio'); setIsRightPanelOpen(false); }}
-            className="flex items-center justify-between p-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/8 cursor-pointer transition group"
+            className="flex items-center justify-between p-3 rounded-xl border border-zinc-850 hover:border-zinc-800 bg-[#202024] hover:bg-zinc-900/60 cursor-pointer transition group"
           >
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-lg bg-white/10 border border-white/15 text-white flex items-center justify-center shrink-0">
                 <Sparkles className="w-4 h-4" />
               </div>
               <div>
-                <h4 className="font-bold text-[11px] text-white leading-tight">AI Video Studio</h4>
+                <h4 className="font-bold text-[11px] text-zinc-200 leading-tight">AI Video Studio</h4>
                 <span className="text-[9px] text-zinc-500">Generate from text/image</span>
               </div>
             </div>
@@ -1058,10 +1058,10 @@ export default function Dashboard() {
             renderTrigger={(open) => (
               <div 
                 onClick={open}
-                className="flex items-center justify-between p-3 rounded-xl border border-zinc-855 hover:border-zinc-800 bg-[#202024] hover:bg-zinc-900/60 cursor-pointer transition group"
+                className="flex items-center justify-between p-3 rounded-xl border border-zinc-850 hover:border-zinc-800 bg-[#202024] hover:bg-zinc-900/60 cursor-pointer transition group"
               >
                 <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-sky-655/10 border border-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
+                  <div className="w-8 h-8 rounded-lg bg-sky-600/10 border border-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
                     <Sparkles className="w-4 h-4" />
                   </div>
                   <div>
@@ -1069,7 +1069,7 @@ export default function Dashboard() {
                     <span className="text-[9px] text-zinc-500">Animate voice portrait</span>
                   </div>
                 </div>
-                <span className="text-zinc-555 text-xs font-semibold select-none group-hover:text-zinc-350">&gt;</span>
+                <span className="text-zinc-550 text-xs font-semibold select-none group-hover:text-zinc-350">&gt;</span>
               </div>
             )}
           />
