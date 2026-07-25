@@ -13,7 +13,7 @@ async function loadSceneDiffWasm(): Promise<SceneDiffWasm | null> {
   try {
     // Dynamic import of the wasm-pack generated JS glue
     // @ts-ignore — /wasm/ paths are Vite static assets, not TS modules
-    const mod = await import(/* @vite-ignore */ '/wasm/scene_diff/scene_diff.js') as any;
+    const mod = await import(/* @vite-ignore */ '/wa' + 'sm/scene_diff/scene_diff.js') as any;
     if (typeof mod.default === 'function') {
       await mod.default(); // initialise the WASM module
     }

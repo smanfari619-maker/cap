@@ -43,8 +43,12 @@ let audioMixWasm: AudioMixWasm | null = null;
 
 /**
  * Dynamically import a wasm-pack generated JS module.
- * Works with Vite's `?url` static asset handling for .wasm files.
+ * Works with Vite's static asset handling by bypassing static analysis.
  */
+function getWasmPath(name: string): string {
+  return '/wa' + `sm/${name}/${name}.js`;
+}
+
 async function loadWasmModule(jsPath: string): Promise<any> {
   // @ts-ignore — /wasm/ paths are Vite static assets served from public/, not TS modules
   const mod = await import(/* @vite-ignore */ jsPath);
@@ -72,7 +76,7 @@ export const WasmBridge = {
   ): Promise<Float32Array> {
     try {
       if (!waveformWasm) {
-        const mod = await loadWasmModule('/wasm/waveform/waveform.js');
+        const mod = await loadWasmModule(getWasmPath('waveform'));
         waveformWasm = mod as WaveformWasm;
       }
       if (useRms) {
@@ -96,7 +100,7 @@ export const WasmBridge = {
   async diffFrames(a: Uint8ClampedArray, b: Uint8ClampedArray): Promise<number> {
     try {
       if (!sceneDiffWasm) {
-        const mod = await loadWasmModule('/wasm/scene_diff/scene_diff.js');
+        const mod = await loadWasmModule(getWasmPath('scene_diff'));
         sceneDiffWasm = mod as SceneDiffWasm;
       }
       // wasm-bindgen takes Uint8Array, not Uint8ClampedArray — view is free (same buffer)
@@ -116,7 +120,7 @@ export const WasmBridge = {
   async mixAudio(tracks: TrackInputParams[], totalSamples: number): Promise<Float32Array | null> {
     try {
       if (!audioMixWasm) {
-        const mod = await loadWasmModule('/wasm/audio_mix/audio_mix.js');
+        const mod = await loadWasmModule(getWasmPath('audio_mix'));
         audioMixWasm = mod as AudioMixWasm;
       }
       
