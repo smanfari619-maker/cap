@@ -1,4 +1,5 @@
 import { Palette, Eye } from 'lucide-react';
+import SnappingSlider from './SnappingSlider';
 
 interface AdjustTabProps {
   selectedClip: any;
@@ -32,13 +33,12 @@ export default function AdjustTab({
               <label className="text-[10px] font-semibold text-zinc-400 uppercase">Brightness</label>
               <span className="text-[10px] font-mono text-zinc-400 font-bold">{colorAdjustments.brightness}%</span>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={50}
               max={150}
+              defaultValue={100}
               value={colorAdjustments.brightness}
-              onChange={(e) => handleColorChange('brightness', Number(e.target.value))}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
+              onChange={(val) => handleColorChange('brightness', val)}
             />
           </div>
 
@@ -48,13 +48,12 @@ export default function AdjustTab({
               <label className="text-[10px] font-semibold text-zinc-400 uppercase">Contrast</label>
               <span className="text-[10px] font-mono text-zinc-400 font-bold">{colorAdjustments.contrast}%</span>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={50}
               max={150}
+              defaultValue={100}
               value={colorAdjustments.contrast}
-              onChange={(e) => handleColorChange('contrast', Number(e.target.value))}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
+              onChange={(val) => handleColorChange('contrast', val)}
             />
           </div>
 
@@ -64,13 +63,12 @@ export default function AdjustTab({
               <label className="text-[10px] font-semibold text-zinc-400 uppercase">Saturation</label>
               <span className="text-[10px] font-mono text-zinc-400 font-bold">{colorAdjustments.saturation}%</span>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={0}
               max={200}
+              defaultValue={100}
               value={colorAdjustments.saturation}
-              onChange={(e) => handleColorChange('saturation', Number(e.target.value))}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
+              onChange={(val) => handleColorChange('saturation', val)}
             />
           </div>
 
@@ -80,13 +78,12 @@ export default function AdjustTab({
               <label className="text-[10px] font-semibold text-zinc-400 uppercase">Temperature</label>
               <span className="text-[10px] font-mono text-zinc-400 font-bold">{colorAdjustments.temp > 0 ? `+${colorAdjustments.temp}` : colorAdjustments.temp}</span>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={-50}
               max={50}
+              defaultValue={0}
               value={colorAdjustments.temp}
-              onChange={(e) => handleColorChange('temp', Number(e.target.value))}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
+              onChange={(val) => handleColorChange('temp', val)}
             />
           </div>
 
@@ -96,13 +93,12 @@ export default function AdjustTab({
               <label className="text-[10px] font-semibold text-zinc-400 uppercase">Vignette</label>
               <span className="text-[10px] font-mono text-zinc-400 font-bold">{colorAdjustments.vignette}%</span>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={0}
               max={100}
+              defaultValue={0}
               value={colorAdjustments.vignette}
-              onChange={(e) => handleColorChange('vignette', Number(e.target.value))}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
+              onChange={(val) => handleColorChange('vignette', val)}
             />
           </div>
         </div>
@@ -143,13 +139,12 @@ export default function AdjustTab({
                 <label className="text-[10px] font-semibold text-zinc-400 uppercase">Filter Intensity</label>
                 <span className="text-[10px] font-mono text-zinc-400 font-bold">{filterSettings.intensity}%</span>
               </div>
-              <input
-                type="range"
+              <SnappingSlider
                 min={10}
                 max={100}
+                defaultValue={100}
                 value={filterSettings.intensity}
-                onChange={(e) => handleFilterChange('intensity', Number(e.target.value))}
-                className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
+                onChange={(val) => handleFilterChange('intensity', val)}
               />
             </div>
           )}
@@ -165,16 +160,15 @@ export default function AdjustTab({
               <label className="text-[10px] font-semibold text-zinc-400 uppercase">Hue Shift</label>
               <span className="text-[10px] font-mono text-zinc-400 font-bold">{selectedClip.hslAdjustments?.hue || 0}°</span>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={-180}
               max={180}
+              defaultValue={0}
               value={selectedClip.hslAdjustments?.hue || 0}
-              onChange={(e) => {
+              onChange={(val) => {
                 const current = selectedClip.hslAdjustments || { hue: 0, saturation: 0, lightness: 0 };
-                updateClip(selectedClip.id, { hslAdjustments: { ...current, hue: Number(e.target.value) } });
+                updateClip(selectedClip.id, { hslAdjustments: { ...current, hue: val } });
               }}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
             />
           </div>
           <div className="space-y-1">
@@ -182,16 +176,15 @@ export default function AdjustTab({
               <label className="text-[10px] font-semibold text-zinc-400 uppercase">Saturation Shift</label>
               <span className="text-[10px] font-mono text-zinc-400 font-bold">{selectedClip.hslAdjustments?.saturation || 0}%</span>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={-100}
               max={100}
+              defaultValue={0}
               value={selectedClip.hslAdjustments?.saturation || 0}
-              onChange={(e) => {
+              onChange={(val) => {
                 const current = selectedClip.hslAdjustments || { hue: 0, saturation: 0, lightness: 0 };
-                updateClip(selectedClip.id, { hslAdjustments: { ...current, saturation: Number(e.target.value) } });
+                updateClip(selectedClip.id, { hslAdjustments: { ...current, saturation: val } });
               }}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
             />
           </div>
           <div className="space-y-1">
@@ -199,16 +192,15 @@ export default function AdjustTab({
               <label className="text-[10px] font-semibold text-zinc-400 uppercase">Lightness Shift</label>
               <span className="text-[10px] font-mono text-zinc-400 font-bold">{selectedClip.hslAdjustments?.lightness || 0}%</span>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={-100}
               max={100}
+              defaultValue={0}
               value={selectedClip.hslAdjustments?.lightness || 0}
-              onChange={(e) => {
+              onChange={(val) => {
                 const current = selectedClip.hslAdjustments || { hue: 0, saturation: 0, lightness: 0 };
-                updateClip(selectedClip.id, { hslAdjustments: { ...current, lightness: Number(e.target.value) } });
+                updateClip(selectedClip.id, { hslAdjustments: { ...current, lightness: val } });
               }}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
             />
           </div>
         </div>
@@ -233,41 +225,54 @@ export default function AdjustTab({
                   <label className="text-[9px] text-zinc-500">Lift (Shadows)</label>
                   <span className="text-[9px] font-mono text-zinc-400">{liftVal}</span>
                 </div>
-                <input type="range" min={-50} max={50} value={liftVal}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    updateClip(selectedClip.id, { colorCorrection: { ...selectedClip.colorCorrection, lift: { ...((selectedClip.colorCorrection?.lift) || {r:0,g:0,b:0}), [ch]: v } } });
+                <SnappingSlider
+                  min={-50}
+                  max={50}
+                  defaultValue={0}
+                  value={liftVal}
+                  onChange={(val) => {
+                    updateClip(selectedClip.id, { colorCorrection: { ...selectedClip.colorCorrection, lift: { ...((selectedClip.colorCorrection?.lift) || {r:0,g:0,b:0}), [ch]: val } } });
                   }}
-                  className={`w-full h-0.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer ${colors[ch]} focus:outline-none`} />
+                  accentColor={colors[ch]}
+                />
               </div>
               <div className="space-y-1">
                 <div className="flex justify-between">
                   <label className="text-[9px] text-zinc-500">Gamma (Mids)</label>
                   <span className="text-[9px] font-mono text-zinc-400">{gammaVal}</span>
                 </div>
-                <input type="range" min={-50} max={50} value={gammaVal}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    updateClip(selectedClip.id, { colorCorrection: { ...selectedClip.colorCorrection, gamma: { ...((selectedClip.colorCorrection?.gamma) || {r:0,g:0,b:0}), [ch]: v } } });
+                <SnappingSlider
+                  min={-50}
+                  max={50}
+                  defaultValue={0}
+                  value={gammaVal}
+                  onChange={(val) => {
+                    updateClip(selectedClip.id, { colorCorrection: { ...selectedClip.colorCorrection, gamma: { ...((selectedClip.colorCorrection?.gamma) || {r:0,g:0,b:0}), [ch]: val } } });
                   }}
-                  className={`w-full h-0.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer ${colors[ch]} focus:outline-none`} />
+                  accentColor={colors[ch]}
+                />
               </div>
               <div className="space-y-1">
                 <div className="flex justify-between">
                   <label className="text-[9px] text-zinc-500">Gain (Highlights)</label>
                   <span className="text-[9px] font-mono text-zinc-400">{gainVal}</span>
                 </div>
-                <input type="range" min={-50} max={50} value={gainVal}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    updateClip(selectedClip.id, { colorCorrection: { ...selectedClip.colorCorrection, gain: { ...((selectedClip.colorCorrection?.gain) || {r:0,g:0,b:0}), [ch]: v } } });
+                <SnappingSlider
+                  min={-50}
+                  max={50}
+                  defaultValue={0}
+                  value={gainVal}
+                  onChange={(val) => {
+                    updateClip(selectedClip.id, { colorCorrection: { ...selectedClip.colorCorrection, gain: { ...((selectedClip.colorCorrection?.gain) || {r:0,g:0,b:0}), [ch]: val } } });
                   }}
-                  className={`w-full h-0.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer ${colors[ch]} focus:outline-none`} />
+                  accentColor={colors[ch]}
+                />
               </div>
             </div>
           );
         })}
       </div>
+
 
       {/* .cube LUT File Import */}
       <div className="space-y-2 pt-4 border-t border-zinc-800">

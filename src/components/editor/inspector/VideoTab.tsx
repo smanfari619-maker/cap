@@ -3,6 +3,7 @@ import { Move, RotateCcw, Eraser, Sparkles, Crosshair, Scissors, Loader2 } from 
 import { db } from '../../../lib/db';
 import { removeWatermark } from '../../../lib/watermark';
 import { autoCutVideoClip } from '../../../lib/scene-detector';
+import SnappingSlider from './SnappingSlider';
 
 interface VideoTabProps {
   selectedClip: any;
@@ -99,13 +100,12 @@ export default function VideoTab({
                 </div>
               </div>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={10}
               max={200}
+              defaultValue={100}
               value={transform.scale}
-              onChange={(e) => handleTransformChange('scale', Number(e.target.value))}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
+              onChange={(val) => handleTransformChange('scale', val)}
             />
           </div>
 
@@ -147,13 +147,12 @@ export default function VideoTab({
                 </div>
               </div>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={-480}
               max={480}
+              defaultValue={0}
               value={transform.x}
-              onChange={(e) => handleTransformChange('x', Number(e.target.value))}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
+              onChange={(val) => handleTransformChange('x', val)}
             />
           </div>
 
@@ -184,13 +183,12 @@ export default function VideoTab({
                 </div>
               </div>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={-270}
               max={270}
+              defaultValue={0}
               value={transform.y}
-              onChange={(e) => handleTransformChange('y', Number(e.target.value))}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
+              onChange={(val) => handleTransformChange('y', val)}
             />
           </div>
 
@@ -221,13 +219,12 @@ export default function VideoTab({
                 </div>
               </div>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={-180}
               max={180}
+              defaultValue={0}
               value={transform.rotation}
-              onChange={(e) => handleTransformChange('rotation', Number(e.target.value))}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
+              onChange={(val) => handleTransformChange('rotation', val)}
             />
           </div>
 
@@ -248,7 +245,7 @@ export default function VideoTab({
                 <div className="flex items-center gap-0.5">
                   <input
                     type="number"
-                    value={Math.round(transform.opacity !== undefined ? transform.opacity : 100)}
+                    value={Math.round(transform.opacity)}
                     min={0}
                     max={100}
                     onChange={(e) => handleTransformChange('opacity', Math.min(100, Math.max(0, Number(e.target.value) || 0)))}
@@ -258,13 +255,12 @@ export default function VideoTab({
                 </div>
               </div>
             </div>
-            <input
-              type="range"
+            <SnappingSlider
               min={0}
               max={100}
-              value={transform.opacity !== undefined ? transform.opacity : 100}
-              onChange={(e) => handleTransformChange('opacity', Number(e.target.value))}
-              className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
+              defaultValue={100}
+              value={transform.opacity}
+              onChange={(val) => handleTransformChange('opacity', val)}
             />
           </div>
 

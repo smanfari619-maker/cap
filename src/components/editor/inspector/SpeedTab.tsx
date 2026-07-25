@@ -1,5 +1,6 @@
 import { Gauge } from 'lucide-react';
 import { useEditorStore } from '../../../store/editorStore';
+import SnappingSlider from './SnappingSlider';
 
 interface SpeedTabProps {
   selectedClip: any;
@@ -18,14 +19,14 @@ export default function SpeedTab({ selectedClip, updateClip }: SpeedTabProps) {
           <label className="text-[10px] font-semibold text-zinc-400 uppercase">Speed Multiplier</label>
           <span className="text-[10px] font-mono text-zinc-400 font-bold">{(selectedClip.speed || 1.0).toFixed(2)}x</span>
         </div>
-        <input
-          type="range"
+        <SnappingSlider
           min={0.25}
           max={4.0}
           step={0.05}
+          defaultValue={1.0}
+          snapThreshold={0.12}
           value={selectedClip.speed || 1.0}
-          onChange={(e) => {
-            const newSpeed = Number(e.target.value);
+          onChange={(newSpeed) => {
             const sourceDuration = selectedClip.trimEndMs - selectedClip.trimStartMs;
             const newDur = Math.round(sourceDuration / newSpeed);
             updateClip(selectedClip.id, {
@@ -33,7 +34,6 @@ export default function SpeedTab({ selectedClip, updateClip }: SpeedTabProps) {
               durationMs: newDur
             });
           }}
-          className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-violet-500 focus:outline-none"
         />
         <div className="flex justify-between text-[8px] text-zinc-550 font-semibold px-1 select-none">
           <span>0.25x</span>
@@ -41,6 +41,7 @@ export default function SpeedTab({ selectedClip, updateClip }: SpeedTabProps) {
           <span>4.0x</span>
         </div>
       </div>
+
 
       {/* Preset Speed Buttons */}
       <div className="space-y-2 pt-3 border-t border-zinc-800">
