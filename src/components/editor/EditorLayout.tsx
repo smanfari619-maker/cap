@@ -474,7 +474,7 @@ export default function EditorLayout() {
           </button>
 
           <div className="flex items-center gap-2">
-            <img src={jellycutLogo} className="h-4 w-auto brightness-200 invert" alt="Jellycut" />
+            <img src={jellycutLogo} className="h-4.5 w-auto opacity-90 hover:opacity-100 transition" alt="Jellycut" />
             <span className="text-xs font-black tracking-widest text-white uppercase border-l border-[#222226] pl-3 py-0.5">
               PRO STUDIO
             </span>
