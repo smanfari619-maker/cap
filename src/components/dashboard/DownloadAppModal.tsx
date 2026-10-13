@@ -30,8 +30,8 @@ export default function DownloadAppModal({ isOpen, onClose }: DownloadAppModalPr
   const DOWNLOAD_URLS = {
     'mac-arm': 'https://github.com/smanfari619-maker/cap/releases/download/v1.0.0/Jellycut-0.0.0-arm64.dmg',
     'mac-intel': 'https://github.com/smanfari619-maker/cap/releases/download/v1.0.0/Jellycut-0.0.0.dmg',
-    'win-installer': 'https://github.com/smanfari619-maker/cap/releases/latest/download/Jellycut-Setup.exe',
-    'win-portable': 'https://github.com/smanfari619-maker/cap/releases/latest/download/Jellycut-Portable.zip',
+    'win-installer': 'https://github.com/smanfari619-maker/cap/releases/download/v1.0.0/Jellycut-Setup-0.0.0.exe',
+    'win-portable': 'https://github.com/smanfari619-maker/cap/releases/download/v1.0.0/Jellycut-0.0.0-portable.exe',
   };
 
   const handleDownload = (platform: 'mac-arm' | 'mac-intel' | 'win-installer' | 'win-portable') => {
