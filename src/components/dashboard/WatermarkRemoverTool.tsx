@@ -16,7 +16,7 @@ import {
   CheckCircle, AlertCircle, Loader2, RefreshCw, X,
   Paintbrush, Hand, ZoomIn, ZoomOut
 } from 'lucide-react';
-import { removeWatermarkFromVideoFile, removeWatermarkFromImageDataSync } from '../../lib/watermark';
+import { removeWatermarkFromVideoFile, removeWatermarkFromImageDataSync, detectVideoMimeType } from '../../lib/watermark';
 
 // ─── Video Processor ──────────────────────────────────────────────────────────
 async function processVideoFast(
@@ -29,7 +29,8 @@ async function processVideoFast(
     const val = Math.round(pct * 100);
     onProgress(val, `Processing… ${val}%`);
   });
-  return new Blob([arrayBuffer], { type: 'video/mp4' });
+  const { mime } = detectVideoMimeType(arrayBuffer);
+  return new Blob([arrayBuffer], { type: mime });
 }
 
 // ─── Image Processing ─────────────────────────────────────────────────────────

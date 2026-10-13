@@ -15,21 +15,46 @@ export function normalizeEvenDimension(dim: number): number {
   return Math.max(2, Math.floor(dim) & ~1);
 }
 
+// ─── Audio encoder check ─────────────────────────────────────────────────────
+
+export async function canMuxAudio(ab: AudioBuffer | null): Promise<boolean> {
+  if (!ab || ab.length === 0) return false;
+  if (typeof AudioEncoder === 'undefined') return false;
+  try {
+    const ch = Math.min(2, Math.max(1, ab.numberOfChannels));
+    const audioConfig: AudioEncoderConfig = {
+      codec           : 'mp4a.40.2',
+      numberOfChannels: ch,
+      sampleRate      : ab.sampleRate,
+      bitrate         : CFG.AUDIO_BITRATE_BPS,
+    };
+    if (typeof AudioEncoder.isConfigSupported === 'function') {
+      const support = await AudioEncoder.isConfigSupported(audioConfig);
+      return Boolean(support.supported);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ─── Video muxer ─────────────────────────────────────────────────────────────
 
 export function makeVideoMuxer(
   vw   : number,
   vh   : number,
-  audio: AudioBuffer | null
+  audio: AudioBuffer | null,
+  isAudioSupported = true
 ): Muxer<ArrayBufferTarget> {
   const normW = normalizeEvenDimension(vw);
   const normH = normalizeEvenDimension(vh);
+  const hasAudio = isAudioSupported && Boolean(audio && audio.length > 0 && typeof AudioEncoder !== 'undefined');
 
   return new Muxer({
     target: new ArrayBufferTarget(),
     video : { codec: 'avc', width: normW, height: normH },
-    audio : audio
-      ? { codec: 'aac', numberOfChannels: audio.numberOfChannels, sampleRate: audio.sampleRate }
+    audio : hasAudio
+      ? { codec: 'aac', numberOfChannels: Math.min(2, Math.max(1, audio!.numberOfChannels)), sampleRate: audio!.sampleRate }
       : undefined,
     fastStart            : 'in-memory',
     firstTimestampBehavior: 'offset',
@@ -129,9 +154,10 @@ export async function muxAudio(
     return;
   }
 
+  const ch = Math.min(2, Math.max(1, ab.numberOfChannels));
   const audioConfig: AudioEncoderConfig = {
     codec             : 'mp4a.40.2',
-    numberOfChannels  : ab.numberOfChannels,
+    numberOfChannels  : ch,
     sampleRate        : ab.sampleRate,
     bitrate           : CFG.AUDIO_BITRATE_BPS,
   };
@@ -162,7 +188,7 @@ export async function muxAudio(
     return;
   }
 
-  const { numberOfChannels: ch, length, sampleRate } = ab;
+  const { length, sampleRate } = ab;
   const fsz = CFG.AUDIO_FRAME_SIZE;
 
   try {

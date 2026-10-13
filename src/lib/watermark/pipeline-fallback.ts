@@ -9,8 +9,43 @@
 
 import { CFG }                  from './config';
 import { getEstimatedGeminiRegion } from './pipeline-webcodecs';
-import { makeVideoMuxer, makeVideoEncoder, muxAudio, finalizeMuxer, normalizeEvenDimension } from './encoder';
+import { 
+  makeVideoMuxer, makeVideoEncoder, muxAudio, 
+  finalizeMuxer, normalizeEvenDimension, canMuxAudio 
+} from './encoder';
 import { inpaintRegion } from './inpaint-telea';
+
+/**
+ * Universal safe seek helper that guarantees execution never hangs,
+ * even if the browser drops the 'seeked' event or currentTime is already equal.
+ */
+export function seekVideoToTime(video: HTMLVideoElement, timeSec: number, timeoutMs = 800): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (Math.abs(video.currentTime - timeSec) < 0.001) {
+      resolve();
+      return;
+    }
+
+    let resolved = false;
+    let timer: any = null;
+
+    const onSeeked = () => {
+      if (resolved) return;
+      resolved = true;
+      if (timer) clearTimeout(timer);
+      video.removeEventListener('seeked', onSeeked);
+      resolve();
+    };
+
+    video.addEventListener('seeked', onSeeked, { once: true });
+    timer = setTimeout(onSeeked, timeoutMs);
+    try {
+      video.currentTime = timeSec;
+    } catch {
+      onSeeked();
+    }
+  });
+}
 
 async function recordCanvasFallback(
   canvas: HTMLCanvasElement,
@@ -49,10 +84,7 @@ async function recordCanvasFallback(
   const h = canvas.height;
 
   for (let i = 0; i < total; i++) {
-    await new Promise<void>(res => {
-      video.addEventListener('seeked', () => res(), { once: true });
-      video.currentTime = i / fps;
-    });
+    await seekVideoToTime(video, i / fps);
 
     ctx.drawImage(video, 0, 0, w, h);
     const imageData = ctx.getImageData(0, 0, w, h);
@@ -77,14 +109,15 @@ export async function pipelineFallback(
   mode: 'translucent' | 'opaque' = 'opaque',
   onProgress?: (p: number) => void
 ): Promise<ArrayBuffer> {
-  // ── Set up video element ───────────────────────────────────────────────────
+  // ── Set up video element with playsInline for iOS / mobile ───────────────────
   const url   = URL.createObjectURL(file);
   const video = Object.assign(document.createElement('video'), {
     src: url, muted: true, playsInline: true, preload: 'auto',
   });
   await new Promise<void>((res, rej) => {
-    video.onloadedmetadata = () => res();
-    video.onerror = () => rej(new Error('Could not load video metadata'));
+    const timer = setTimeout(() => rej(new Error('Could not load video metadata (timeout)')), 8000);
+    video.onloadedmetadata = () => { clearTimeout(timer); res(); };
+    video.onerror = () => { clearTimeout(timer); rej(new Error('Could not load video metadata')); };
   });
 
   const fps   = 30;
@@ -112,16 +145,14 @@ export async function pipelineFallback(
     }
   }
 
-  // ── WebCodecs Frame loop ───────────────────────────────────────────────────
-  const muxer = makeVideoMuxer(normW, normH, audio);
-  const enc   = await makeVideoEncoder(muxer, normW, normH, fps);
+  // ── WebCodecs Frame loop with universal safe seeking ─────────────────────────
+  const audioOk = await canMuxAudio(audio);
+  const muxer   = makeVideoMuxer(normW, normH, audio, audioOk);
+  const enc     = await makeVideoEncoder(muxer, normW, normH, fps);
 
   try {
     for (let i = 0; i < total; i++) {
-      await new Promise<void>(res => {
-        video.addEventListener('seeked', () => res(), { once: true });
-        video.currentTime = i / fps;
-      });
+      await seekVideoToTime(video, i / fps);
 
       // Draw → inpaint → encode
       ctx.drawImage(video, 0, 0, normW, normH);
@@ -137,7 +168,7 @@ export async function pipelineFallback(
     }
 
     await enc.flush(); enc.close();
-    if (audio) { onProgress?.(0.92); await muxAudio(muxer, audio); }
+    if (audioOk && audio) { onProgress?.(0.92); await muxAudio(muxer, audio); }
     onProgress?.(0.97);
   } catch (err) {
     try { if (enc.state !== 'closed') enc.close(); } catch { /* ignore */ }

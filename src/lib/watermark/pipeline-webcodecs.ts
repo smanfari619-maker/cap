@@ -10,7 +10,7 @@
 
 import { CFG }            from './config';
 import { demuxMP4 }       from './demuxer';
-import { makeVideoMuxer, makeVideoEncoder, muxAudio, finalizeMuxer } from './encoder';
+import { makeVideoMuxer, makeVideoEncoder, muxAudio, finalizeMuxer, canMuxAudio } from './encoder';
 import { inpaintRegion }  from './inpaint-telea';
 
 /**
@@ -56,7 +56,8 @@ export async function pipelineWebCodecs(
   const ctx    = canvas.getContext('2d', { willReadFrequently: true })!;
 
   // ── 3. WebCodecs Decode & Encode Loop ────────────────────────────────────────
-  const muxer = makeVideoMuxer(normW, normH, audio);
+  const audioOk = await canMuxAudio(audio);
+  const muxer = makeVideoMuxer(normW, normH, audio, audioOk);
   const enc   = await makeVideoEncoder(muxer, normW, normH, 30);
 
   const queue: VideoFrame[] = [];
@@ -118,7 +119,7 @@ export async function pipelineWebCodecs(
     }
 
     await enc.flush(); enc.close(); dec.close();
-    if (audio) { onProgress?.(0.92); await muxAudio(muxer, audio); }
+    if (audioOk && audio) { onProgress?.(0.92); await muxAudio(muxer, audio); }
     onProgress?.(0.97);
   } catch (err) {
     try { if (enc.state !== 'closed') enc.close(); } catch { /* ignore */ }
