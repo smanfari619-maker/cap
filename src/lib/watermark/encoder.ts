@@ -1,11 +1,19 @@
 /**
- * encoder.ts — Video muxer + encoder factory helpers.
+ * encoder.ts — Video muxer + encoder factory helpers with cross-device fallbacks.
  *
- * Keeps mp4-muxer and WebCodecs encoder setup away from pipeline logic.
+ * Provides dynamic hardware acceleration & codec profile negotiation for
+ * Windows, macOS, Linux, and various GPU architectures (NVIDIA, AMD, Intel, Apple Silicon).
  */
 
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import { CFG } from './config';
+
+// ─── Dimension Helper ─────────────────────────────────────────────────────────
+
+/** Enforces even dimensions (required by Windows Media Foundation & hardware encoders) */
+export function normalizeEvenDimension(dim: number): number {
+  return Math.max(2, Math.floor(dim) & ~1);
+}
 
 // ─── Video muxer ─────────────────────────────────────────────────────────────
 
@@ -14,9 +22,12 @@ export function makeVideoMuxer(
   vh   : number,
   audio: AudioBuffer | null
 ): Muxer<ArrayBufferTarget> {
+  const normW = normalizeEvenDimension(vw);
+  const normH = normalizeEvenDimension(vh);
+
   return new Muxer({
     target: new ArrayBufferTarget(),
-    video : { codec: 'avc', width: vw, height: vh },
+    video : { codec: 'avc', width: normW, height: normH },
     audio : audio
       ? { codec: 'aac', numberOfChannels: audio.numberOfChannels, sampleRate: audio.sampleRate }
       : undefined,
@@ -25,69 +36,157 @@ export function makeVideoMuxer(
   });
 }
 
-// ─── Video encoder ────────────────────────────────────────────────────────────
+// ─── Video encoder negotiation ───────────────────────────────────────────────
 
-export function makeVideoEncoder(
+export async function getSupportedVideoEncoderConfig(
+  width: number,
+  height: number,
+  fps = 30,
+  bitrate: number = CFG.ENCODER_BITRATE_BPS
+): Promise<VideoEncoderConfig> {
+  const normW = normalizeEvenDimension(width);
+  const normH = normalizeEvenDimension(height);
+
+  // Candidate codec profiles tested from highest quality to most compatible baseline
+  const candidates: Array<{ codec: string; accel: HardwareAcceleration }> = [
+    // 1. High Profile (Level 5.1 / 4.2)
+    { codec: (normW > 1920 || normH > 1080) ? 'avc1.640033' : 'avc1.64002a', accel: 'prefer-hardware' },
+    { codec: (normW > 1920 || normH > 1080) ? 'avc1.640033' : 'avc1.64002a', accel: 'no-preference' },
+    // 2. Main Profile
+    { codec: 'avc1.4d402a', accel: 'prefer-hardware' },
+    { codec: 'avc1.4d402a', accel: 'no-preference' },
+    // 3. Baseline Profile (widest compatibility on Windows & Intel integrated graphics)
+    { codec: 'avc1.42e01f', accel: 'prefer-hardware' },
+    { codec: 'avc1.42e01f', accel: 'no-preference' },
+    { codec: 'avc1.42001e', accel: 'no-preference' },
+  ];
+
+  for (const candidate of candidates) {
+    const config: VideoEncoderConfig = {
+      codec: candidate.codec,
+      width: normW,
+      height: normH,
+      bitrate,
+      framerate: fps,
+      bitrateMode: 'variable',
+      hardwareAcceleration: candidate.accel,
+    };
+
+    try {
+      if (typeof VideoEncoder !== 'undefined' && typeof VideoEncoder.isConfigSupported === 'function') {
+        const support = await VideoEncoder.isConfigSupported(config);
+        if (support.supported && support.config) {
+          return support.config;
+        }
+      } else {
+        return config;
+      }
+    } catch {
+      // Continue trying next candidate
+    }
+  }
+
+  // Fallback safe configuration
+  return {
+    codec: 'avc1.42e01f',
+    width: normW,
+    height: normH,
+    bitrate,
+    framerate: fps,
+    bitrateMode: 'variable',
+    hardwareAcceleration: 'no-preference',
+  };
+}
+
+export async function makeVideoEncoder(
   muxer: Muxer<ArrayBufferTarget>,
   vw   : number,
   vh   : number,
   fps  = 30
-): VideoEncoder {
-  // High profile for >1080p, otherwise Main profile
-  const codec = (vw > 1920 || vh > 1080) ? 'avc1.640033' : 'avc1.64002a';
-  const enc   = new VideoEncoder({
+): Promise<VideoEncoder> {
+  const enc = new VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-    error : (e) => { throw e; },
+    error : (e) => {
+      console.error('[WebCodecs VideoEncoder Error]', e);
+      throw e;
+    },
   });
-  enc.configure({
-    codec,
-    width : vw, height: vh,
-    bitrate           : CFG.ENCODER_BITRATE_BPS,
-    framerate         : fps,
-    bitrateMode       : 'variable',
-    hardwareAcceleration: 'prefer-hardware',
-  });
+
+  const config = await getSupportedVideoEncoderConfig(vw, vh, fps);
+  enc.configure(config);
   return enc;
 }
 
 // ─── Audio encoder ────────────────────────────────────────────────────────────
 
-/** Encode an AudioBuffer and add it to the muxer. */
+/** Encode an AudioBuffer and add it to the muxer, with non-fatal fallback. */
 export async function muxAudio(
   muxer: Muxer<ArrayBufferTarget>,
   ab   : AudioBuffer
 ): Promise<void> {
-  const enc = new AudioEncoder({
-    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-    error : (e) => { throw e; },
-  });
-  enc.configure({
+  if (typeof AudioEncoder === 'undefined') {
+    console.warn('[WM] AudioEncoder not available in this browser context; skipping audio muxing.');
+    return;
+  }
+
+  const audioConfig: AudioEncoderConfig = {
     codec             : 'mp4a.40.2',
     numberOfChannels  : ab.numberOfChannels,
     sampleRate        : ab.sampleRate,
     bitrate           : CFG.AUDIO_BITRATE_BPS,
-  });
+  };
+
+  try {
+    if (typeof AudioEncoder.isConfigSupported === 'function') {
+      const support = await AudioEncoder.isConfigSupported(audioConfig);
+      if (!support.supported) {
+        console.warn(`[WM] AudioEncoder does not support sample rate ${ab.sampleRate}Hz on this OS; skipping audio.`);
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('[WM] AudioEncoder support check encountered error:', err);
+  }
+
+  let enc: AudioEncoder;
+  try {
+    enc = new AudioEncoder({
+      output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+      error : (e) => {
+        console.warn('[WM] AudioEncoder runtime error (non-fatal):', e);
+      },
+    });
+    enc.configure(audioConfig);
+  } catch (err) {
+    console.warn('[WM] Failed to configure AudioEncoder on this device (proceeding without audio):', err);
+    return;
+  }
 
   const { numberOfChannels: ch, length, sampleRate } = ab;
   const fsz = CFG.AUDIO_FRAME_SIZE;
 
-  for (let off = 0; off < length; off += fsz) {
-    const sz   = Math.min(fsz, length - off);
-    const data = new Float32Array(sz * ch);
-    for (let c = 0; c < ch; c++) {
-      const src = ab.getChannelData(c);
-      for (let k = 0; k < sz; k++) data[c * sz + k] = src[off + k];
+  try {
+    for (let off = 0; off < length; off += fsz) {
+      const sz   = Math.min(fsz, length - off);
+      const data = new Float32Array(sz * ch);
+      for (let c = 0; c < ch; c++) {
+        const src = ab.getChannelData(c);
+        for (let k = 0; k < sz; k++) data[c * sz + k] = src[off + k];
+      }
+      const af = new AudioData({
+        format: 'f32-planar', sampleRate,
+        numberOfFrames: sz, numberOfChannels: ch,
+        timestamp: (off * 1_000_000) / sampleRate, data,
+      });
+      enc.encode(af);
+      af.close();
     }
-    const af = new AudioData({
-      format: 'f32-planar', sampleRate,
-      numberOfFrames: sz, numberOfChannels: ch,
-      timestamp: (off * 1_000_000) / sampleRate, data,
-    });
-    enc.encode(af);
-    af.close();
+    await enc.flush();
+    enc.close();
+  } catch (err) {
+    console.warn('[WM] Error during audio encoding loop (proceeding with clean video):', err);
+    try { if (enc.state !== 'closed') enc.close(); } catch { /* ignore */ }
   }
-  await enc.flush();
-  enc.close();
 }
 
 // ─── Finalise ─────────────────────────────────────────────────────────────────

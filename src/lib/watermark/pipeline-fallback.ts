@@ -1,15 +1,71 @@
 /**
- * pipeline-fallback.ts — Seek-based pipeline for containers mp4box cannot demux.
+ * pipeline-fallback.ts — Seek-based pipeline for containers mp4box cannot demux
+ * or browsers without WebCodecs support (e.g. Firefox).
  *
  * Uses HTMLVideoElement.currentTime seeks to extract frames.
- * Slower than WebCodecs but universally compatible.
+ * Slower than WebCodecs but universally compatible across all devices.
  * Applies Telea + Exemplar Patch inpainting to every frame.
  */
 
 import { CFG }                  from './config';
 import { getEstimatedGeminiRegion } from './pipeline-webcodecs';
-import { makeVideoMuxer, makeVideoEncoder, muxAudio, finalizeMuxer } from './encoder';
+import { makeVideoMuxer, makeVideoEncoder, muxAudio, finalizeMuxer, normalizeEvenDimension } from './encoder';
 import { inpaintRegion } from './inpaint-telea';
+
+async function recordCanvasFallback(
+  canvas: HTMLCanvasElement,
+  video: HTMLVideoElement,
+  total: number,
+  fps: number,
+  activeRegion: any,
+  onProgress?: (p: number) => void
+): Promise<ArrayBuffer> {
+  const stream = canvas.captureStream(fps);
+  const mimeType = (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('video/mp4'))
+    ? 'video/mp4'
+    : (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('video/webm;codecs=vp9'))
+    ? 'video/webm;codecs=vp9'
+    : 'video/webm';
+
+  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: CFG.ENCODER_BITRATE_BPS });
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+
+  const finished = new Promise<ArrayBuffer>((resolve, reject) => {
+    recorder.onstop = async () => {
+      try {
+        const blob = new Blob(chunks, { type: mimeType });
+        resolve(await blob.arrayBuffer());
+      } catch (e) {
+        reject(e);
+      }
+    };
+    recorder.onerror = e => reject((e as any).error || new Error('MediaRecorder error'));
+  });
+
+  recorder.start();
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  const w = canvas.width;
+  const h = canvas.height;
+
+  for (let i = 0; i < total; i++) {
+    await new Promise<void>(res => {
+      video.addEventListener('seeked', () => res(), { once: true });
+      video.currentTime = i / fps;
+    });
+
+    ctx.drawImage(video, 0, 0, w, h);
+    const imageData = ctx.getImageData(0, 0, w, h);
+    const inpainted = inpaintRegion(imageData, activeRegion);
+    ctx.putImageData(inpainted, 0, 0);
+
+    onProgress?.(0.18 + (i / total) * 0.72);
+    await new Promise(r => setTimeout(r, Math.max(10, Math.floor(1000 / fps))));
+  }
+
+  recorder.stop();
+  return await finished;
+}
 
 export async function pipelineFallback(
   file      : File,
@@ -34,18 +90,31 @@ export async function pipelineFallback(
   const fps   = 30;
   const total = Math.max(1, Math.ceil(video.duration * fps));
 
+  const normW = normalizeEvenDimension(vw);
+  const normH = normalizeEvenDimension(vh);
+
   const canvas = document.createElement('canvas');
-  canvas.width = vw; canvas.height = vh;
+  canvas.width = normW; canvas.height = normH;
   const ctx    = canvas.getContext('2d', { willReadFrequently: true })!;
 
   // ── Determine region ───────────────────────────────────────────────────────
-  const activeRegion = region || getEstimatedGeminiRegion(vw, vh);
-  console.log('[WM/Fallback] Inpainting region:', activeRegion);
+  const activeRegion = region || getEstimatedGeminiRegion(normW, normH);
+  console.log('[WM/Fallback] Inpainting region:', activeRegion, `dims: ${normW}x${normH}`);
   onProgress?.(0.18);
 
-  // ── Frame loop ─────────────────────────────────────────────────────────────
-  const muxer = makeVideoMuxer(vw, vh, audio);
-  const enc   = makeVideoEncoder(muxer, vw, vh, fps);
+  // ── Universal MediaRecorder fallback if WebCodecs is unavailable (e.g. Firefox) ──
+  if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') {
+    try {
+      return await recordCanvasFallback(canvas, video, total, fps, activeRegion, onProgress);
+    } finally {
+      URL.revokeObjectURL(url);
+      video.remove();
+    }
+  }
+
+  // ── WebCodecs Frame loop ───────────────────────────────────────────────────
+  const muxer = makeVideoMuxer(normW, normH, audio);
+  const enc   = await makeVideoEncoder(muxer, normW, normH, fps);
 
   try {
     for (let i = 0; i < total; i++) {
@@ -55,8 +124,8 @@ export async function pipelineFallback(
       });
 
       // Draw → inpaint → encode
-      ctx.drawImage(video, 0, 0, vw, vh);
-      const imageData = ctx.getImageData(0, 0, vw, vh);
+      ctx.drawImage(video, 0, 0, normW, normH);
+      const imageData = ctx.getImageData(0, 0, normW, normH);
       const inpainted = inpaintRegion(imageData, activeRegion);
       ctx.putImageData(inpainted, 0, 0);
 

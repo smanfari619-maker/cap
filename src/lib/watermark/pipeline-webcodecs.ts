@@ -44,18 +44,20 @@ export async function pipelineWebCodecs(
   const demuxed     = await demuxMP4(arrayBuffer);
   onProgress?.(0.12);
 
-  // ── 2. Determine watermark region ───────────────────────────────────────────
-  const activeRegion = region || getEstimatedGeminiRegion(vw, vh);
-  console.log('[WM/WebCodecs] Inpainting region:', activeRegion);
+  // ── 2. Determine watermark region & normalize dimensions ───────────────────
+  const normW = Math.max(2, Math.floor(vw) & ~1);
+  const normH = Math.max(2, Math.floor(vh) & ~1);
+  const activeRegion = region || getEstimatedGeminiRegion(normW, normH);
+  console.log('[WM/WebCodecs] Inpainting region:', activeRegion, `dims: ${normW}x${normH}`);
   onProgress?.(0.18);
 
   const canvas = document.createElement('canvas');
-  canvas.width = vw; canvas.height = vh;
+  canvas.width = normW; canvas.height = normH;
   const ctx    = canvas.getContext('2d', { willReadFrequently: true })!;
 
   // ── 3. WebCodecs Decode & Encode Loop ────────────────────────────────────────
-  const muxer = makeVideoMuxer(vw, vh, audio);
-  const enc   = makeVideoEncoder(muxer, vw, vh, 30);
+  const muxer = makeVideoMuxer(normW, normH, audio);
+  const enc   = await makeVideoEncoder(muxer, normW, normH, 30);
 
   const queue: VideoFrame[] = [];
   let resolver: (() => void) | null = null;
@@ -102,8 +104,8 @@ export async function pipelineWebCodecs(
       const frame = queue.shift()!;
 
       // Draw frame → inpaint → encode
-      ctx.drawImage(frame, 0, 0, vw, vh);
-      const imageData  = ctx.getImageData(0, 0, vw, vh);
+      ctx.drawImage(frame, 0, 0, normW, normH);
+      const imageData  = ctx.getImageData(0, 0, normW, normH);
       const inpainted  = inpaintRegion(imageData, activeRegion);
       ctx.putImageData(inpainted, 0, 0);
 

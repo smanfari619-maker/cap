@@ -9,6 +9,7 @@ import { applyTransitionTransform, drawTransitionOverlay, applyWipeClip } from '
 import { buildEffectFilterString, applyCanvasEffect } from './effects-registry';
 import { getSubjectFaceCenter } from './face-tracker';
 import { createFile, DataStream, Endianness } from 'mp4box';
+import { getSupportedVideoEncoderConfig, normalizeEvenDimension } from './watermark/encoder';
 
 export interface ExportSettings {
   width: number;
@@ -281,17 +282,20 @@ export async function exportProjectWebCodecs(
   const totalFrames = Math.ceil((durationMs / 1000) * fps);
   const smoothedRefX: Record<string, number> = {};
 
+  const normWidth = normalizeEvenDimension(width);
+  const normHeight = normalizeEvenDimension(height);
+
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
     video: {
       codec: 'avc',
-      width,
-      height
+      width: normWidth,
+      height: normHeight
     },
     audio: audioBuffer ? {
       codec: 'aac',
       numberOfChannels: 2,
-      sampleRate: 44100
+      sampleRate: audioBuffer.sampleRate || 44100
     } : undefined,
     fastStart: 'in-memory'
   });
@@ -306,33 +310,39 @@ export async function exportProjectWebCodecs(
     }
   });
 
-  const codec = (width > 1920 || height > 1080) ? 'avc1.640033' : 'avc1.64002a';
-  videoEncoder.configure({
-    codec,
-    width,
-    height,
-    bitrate,
-    framerate: fps,
-    bitrateMode: 'variable',
-    hardwareAcceleration: 'prefer-hardware'
-  });
+  const videoConfig = await getSupportedVideoEncoderConfig(normWidth, normHeight, fps, bitrate);
+  videoEncoder.configure(videoConfig);
 
   let audioEncoder: AudioEncoder | null = null;
-  if (audioBuffer) {
-    audioEncoder = new AudioEncoder({
-      output: (chunk, metadata) => muxer.addAudioChunk(chunk, metadata),
-      error: (e) => {
-        console.error('Audio Encoder Error:', e);
-        encodeError = e;
-      }
-    });
+  if (audioBuffer && typeof AudioEncoder !== 'undefined') {
+    try {
+      const audioConfig: AudioEncoderConfig = {
+        codec: 'mp4a.40.2',
+        numberOfChannels: 2,
+        sampleRate: audioBuffer.sampleRate || 44100,
+        bitrate: 128000
+      };
 
-    audioEncoder.configure({
-      codec: 'mp4a.40.2',
-      numberOfChannels: 2,
-      sampleRate: audioBuffer.sampleRate,
-      bitrate: 128000
-    });
+      let audioSupported = true;
+      if (typeof AudioEncoder.isConfigSupported === 'function') {
+        const support = await AudioEncoder.isConfigSupported(audioConfig);
+        audioSupported = Boolean(support.supported);
+      }
+
+      if (audioSupported) {
+        audioEncoder = new AudioEncoder({
+          output: (chunk, metadata) => muxer.addAudioChunk(chunk, metadata),
+          error: (e) => {
+            console.warn('Audio Encoder Error (non-fatal):', e);
+          }
+        });
+        audioEncoder.configure(audioConfig);
+      } else {
+        console.warn('[Exporter] AudioEncoder not supported for this sample rate; exporting video without audio track.');
+      }
+    } catch (err) {
+      console.warn('[Exporter] AudioEncoder initialization failed; proceeding with video only:', err);
+    }
   }
 
   // 4. Preload visual and audio assets

@@ -31,6 +31,13 @@ async function extractAudio(file: File): Promise<AudioBuffer | null> {
 // ─── Choose pipeline ──────────────────────────────────────────────────────────
 
 function hasWebCodecs(): boolean {
+  if (typeof window !== 'undefined' && !window.isSecureContext) {
+    console.warn(
+      '[WM] Note: Application is accessed on an insecure HTTP context (e.g. LAN IP). ' +
+      'WebCodecs hardware acceleration requires HTTPS or localhost. Using universal fallback pipeline.'
+    );
+    return false;
+  }
   return typeof VideoDecoder !== 'undefined' && typeof VideoEncoder !== 'undefined';
 }
 
