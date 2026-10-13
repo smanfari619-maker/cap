@@ -116,7 +116,7 @@ export default function VideoPreview() {
     const cacheMap = videoFrameCacheRef.current;
 
     // Get all clips within +/- 15 seconds of the playhead that need audio/video element loading
-    const clipMediaSpecs: { clipId: string; assetId: string }[] = [];
+    const clipMediaSpecs: { clipId: string; assetId: string; distance: number }[] = [];
     const activeClipKeys = new Set<string>();
     const imageAssetIds = new Set<string>();
 
@@ -137,20 +137,30 @@ export default function VideoPreview() {
         const startMs = clip.positionMs - transIn / 2;
         const endMs = clip.positionMs + clip.durationMs + transOut / 2;
 
-        const isNearPlayhead = time >= startMs - 15000 && time < endMs + 15000;
+        const isNearPlayhead = time >= startMs - 10000 && time < endMs + 10000;
 
         if (isNearPlayhead) {
           if (clip.type === 'image') {
             imageAssetIds.add(clip.assetId);
           } else {
-            clipMediaSpecs.push({ clipId: clip.id, assetId: clip.assetId });
-            activeClipKeys.add(`${clip.id}_${clip.assetId}`);
+            const centerTime = (startMs + endMs) / 2;
+            const distance = Math.abs(time - centerTime);
+            clipMediaSpecs.push({ clipId: clip.id, assetId: clip.assetId, distance });
           }
         }
       });
     });
 
-    // Revoke and delete old media elements that are no longer within the playhead window
+    // HARDENING: Cap active video elements to maximum 4 to safely stay below Chromium's 16-decoder hardware limit
+    const MAX_CONCURRENT_VIDEOS = 4;
+    clipMediaSpecs.sort((a, b) => a.distance - b.distance);
+    const prioritizedSpecs = clipMediaSpecs.slice(0, MAX_CONCURRENT_VIDEOS);
+
+    for (const spec of prioritizedSpecs) {
+      activeClipKeys.add(`${spec.clipId}_${spec.assetId}`);
+    }
+
+    // Revoke and delete old media elements that are no longer within the active window
     for (const [key, element] of mediaMap.entries()) {
       if (!activeClipKeys.has(key)) {
         element.pause();
@@ -196,8 +206,8 @@ export default function VideoPreview() {
       }
     }
 
-    // Load new media elements for audio/video clips near playhead
-    for (const { clipId, assetId } of clipMediaSpecs) {
+    // Load new media elements for audio/video clips near playhead (prioritized)
+    for (const { clipId, assetId } of prioritizedSpecs) {
       const key = `${clipId}_${assetId}`;
       if (!mediaMap.has(key)) {
         try {

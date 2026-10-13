@@ -327,7 +327,7 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
 
     const processQueue = async () => {
       const pendingAssets = assets.filter(
-        asset => !thumbnailCache[asset.id] && !asset.type.startsWith('audio/')
+        asset => !thumbnailCacheRef.current[asset.id] && !asset.type.startsWith('audio/')
       );
 
       for (const asset of pendingAssets) {
@@ -369,7 +369,9 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
                 const ctx = canvas.getContext('2d');
                 if (ctx) {
                   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                  setThumbnailCache(prev => ({ ...prev, [asset.id]: canvas.toDataURL('image/jpeg', 0.7) }));
+                  const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+                  thumbnailCacheRef.current[asset.id] = dataUrl;
+                  setThumbnailCache(prev => ({ ...prev, [asset.id]: dataUrl }));
                 }
                 URL.revokeObjectURL(objectUrl);
                 resolve();
@@ -381,7 +383,7 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
               img.src = objectUrl;
             });
           } else {
-            // Video sequential seeking
+            // Video sequential seeking with safety timeout
             await new Promise<void>((resolve) => {
               const video = document.createElement('video');
               video.src = objectUrl;
@@ -398,7 +400,7 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
                 resolve();
               };
 
-              const timeoutId = setTimeout(cleanup, 10000); // 10s maximum seek wait
+              const timeoutId = setTimeout(cleanup, 6000); // 6s maximum seek wait
 
               video.onloadeddata = () => {
                 video.currentTime = Math.min(1, video.duration ? video.duration / 2 : 1);
@@ -414,7 +416,9 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
                   const ctx = canvas.getContext('2d');
                   if (ctx) {
                     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                    setThumbnailCache(prev => ({ ...prev, [asset.id]: canvas.toDataURL('image/jpeg', 0.6) }));
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+                    thumbnailCacheRef.current[asset.id] = dataUrl;
+                    setThumbnailCache(prev => ({ ...prev, [asset.id]: dataUrl }));
                   }
                 }
                 cleanup();
@@ -439,7 +443,8 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
     return () => {
       active = false;
     };
-  }, [assetIds, thumbnailCache, assets]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assetIds]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -479,11 +484,6 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
           height = metadata.height;
         }
 
-        let waveformPeaks: number[] | undefined;
-        if (!file.type.startsWith('image/')) {
-          waveformPeaks = await generateWaveformPeaks(opfsPath);
-        }
-
         const newAsset: Asset = {
           id: assetId,
           projectId: currentProjectId,
@@ -494,11 +494,19 @@ export default function MediaPanel({ activeTab, selectedClipId: _selectedClipId,
           width,
           height,
           opfsPath,
-          waveformPeaks,
           createdAt: new Date()
         };
 
         await db.assets.put(newAsset);
+
+        // Compute waveform peaks in background without blocking batch import
+        if (!file.type.startsWith('image/')) {
+          generateWaveformPeaks(opfsPath).then(peaks => {
+            if (peaks && peaks.length > 0) {
+              db.assets.update(assetId, { waveformPeaks: peaks }).catch(() => {});
+            }
+          }).catch(() => {});
+        }
       } catch (error) {
         console.error('Failed to import file:', error);
         alert(`Error importing ${file.name}`);

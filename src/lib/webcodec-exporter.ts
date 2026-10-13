@@ -345,53 +345,12 @@ export async function exportProjectWebCodecs(
     }
   }
 
-  // 4. Preload visual and audio assets
-  const videoElements = new Map<string, HTMLVideoElement>();
+  // 4. Preload image assets & setup bounded dynamic video decoder pool
   const imageElements = new Map<string, HTMLImageElement>();
-  const videoReaders = new Map<string, VideoDecoderReader>();
 
   for (const track of project.tracks) {
     for (const clip of track.clips) {
-      if (clip.type === 'video' && clip.assetId) {
-        // Pre-create high performance WebCodecs Reader
-        if (!videoReaders.has(clip.id)) {
-          try {
-            const asset = await db.assets.get(clip.assetId);
-            if (asset) {
-              const file = await getFileFromOPFS(asset.opfsPath);
-              const arrayBuffer = await file.arrayBuffer();
-              const reader = new VideoDecoderReader(arrayBuffer);
-              await reader.init(clip.trimStartMs / 1000);
-              videoReaders.set(clip.id, reader);
-              console.log(`[Exporter] Initialized hardware reader for clip: ${clip.id}`);
-            }
-          } catch (err) {
-            console.warn(`[Exporter] Failed to initialize hardware reader for clip ${clip.id}, will use seek fallback:`, err);
-          }
-        }
-
-        // Preload seek-based HTMLVideoElement fallback
-        if (!videoElements.has(clip.assetId)) {
-          try {
-            const asset = await db.assets.get(clip.assetId);
-            if (asset) {
-              const file = await getFileFromOPFS(asset.opfsPath);
-              const url = URL.createObjectURL(file);
-              const video = document.createElement('video');
-              video.src = url;
-              video.muted = true;
-              video.playsInline = true;
-              video.preload = 'auto';
-              await new Promise((resolve) => {
-                video.onloadedmetadata = resolve;
-              });
-              videoElements.set(clip.assetId, video);
-            }
-          } catch (err) {
-            console.warn(`[Exporter] Failed to preload fallback video element:`, err);
-          }
-        }
-      } else if (clip.type === 'image' && clip.assetId && !imageElements.has(clip.assetId)) {
+      if (clip.type === 'image' && clip.assetId && !imageElements.has(clip.assetId)) {
         try {
           const asset = await db.assets.get(clip.assetId);
           if (asset) {
@@ -399,9 +358,10 @@ export async function exportProjectWebCodecs(
             const url = URL.createObjectURL(file);
             const img = new Image();
             img.src = url;
-            await new Promise((resolve, reject) => {
-              img.onload = resolve;
-              img.onerror = reject;
+            await new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(resolve, 3000);
+              img.onload = () => { clearTimeout(timer); resolve(); };
+              img.onerror = () => { clearTimeout(timer); reject(); };
             });
             imageElements.set(clip.assetId, img);
           }
@@ -409,6 +369,106 @@ export async function exportProjectWebCodecs(
           console.warn(`Failed to preload image asset for export:`, err);
         }
       }
+    }
+  }
+
+  // HARDENING: Bounded Decoder Pool to avoid exceeding Chromium's 16 hardware decoder limit
+  const MAX_ACTIVE_DECODERS = 3;
+  const videoReaders = new Map<string, { reader: VideoDecoderReader; lastUsedFrame: number }>();
+  const videoElements = new Map<string, { video: HTMLVideoElement; url: string; lastUsedFrame: number }>();
+
+  async function getOrInitVideoReader(clip: TimelineClip, currentFrame: number): Promise<VideoDecoderReader | null> {
+    if (!clip.assetId) return null;
+    const existing = videoReaders.get(clip.id);
+    if (existing) {
+      existing.lastUsedFrame = currentFrame;
+      return existing.reader;
+    }
+
+    // Evict oldest reader when pool reaches maximum capacity
+    if (videoReaders.size >= MAX_ACTIVE_DECODERS) {
+      let oldestId: string | null = null;
+      let minFrame = Infinity;
+      for (const [id, item] of videoReaders.entries()) {
+        if (item.lastUsedFrame < minFrame) {
+          minFrame = item.lastUsedFrame;
+          oldestId = id;
+        }
+      }
+      if (oldestId) {
+        const evicted = videoReaders.get(oldestId);
+        if (evicted) {
+          try { evicted.reader.close(); } catch { /* ignore */ }
+          videoReaders.delete(oldestId);
+        }
+      }
+    }
+
+    try {
+      const asset = await db.assets.get(clip.assetId);
+      if (!asset) return null;
+      const file = await getFileFromOPFS(asset.opfsPath);
+      const arrayBuffer = await file.arrayBuffer();
+      const reader = new VideoDecoderReader(arrayBuffer);
+      await reader.init(clip.trimStartMs / 1000);
+      videoReaders.set(clip.id, { reader, lastUsedFrame: currentFrame });
+      return reader;
+    } catch (err) {
+      console.warn(`[Exporter] Hardware decoder init failed for clip ${clip.id}; falling back:`, err);
+      return null;
+    }
+  }
+
+  async function getOrInitFallbackVideo(assetId: string, currentFrame: number): Promise<HTMLVideoElement | null> {
+    const existing = videoElements.get(assetId);
+    if (existing) {
+      existing.lastUsedFrame = currentFrame;
+      return existing.video;
+    }
+
+    // Evict oldest fallback video element when pool reaches capacity
+    if (videoElements.size >= MAX_ACTIVE_DECODERS) {
+      let oldestId: string | null = null;
+      let minFrame = Infinity;
+      for (const [id, item] of videoElements.entries()) {
+        if (item.lastUsedFrame < minFrame) {
+          minFrame = item.lastUsedFrame;
+          oldestId = id;
+        }
+      }
+      if (oldestId) {
+        const evicted = videoElements.get(oldestId);
+        if (evicted) {
+          evicted.video.pause();
+          evicted.video.src = '';
+          try { evicted.video.load(); } catch { /* ignore */ }
+          URL.revokeObjectURL(evicted.url);
+          evicted.video.remove();
+          videoElements.delete(oldestId);
+        }
+      }
+    }
+
+    try {
+      const asset = await db.assets.get(assetId);
+      if (!asset) return null;
+      const file = await getFileFromOPFS(asset.opfsPath);
+      const url = URL.createObjectURL(file);
+      const video = document.createElement('video');
+      video.src = url;
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = 'auto';
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 3000);
+        video.onloadedmetadata = () => { clearTimeout(timer); resolve(); };
+        video.onerror = () => { clearTimeout(timer); resolve(); };
+      });
+      videoElements.set(assetId, { video, url, lastUsedFrame: currentFrame });
+      return video;
+    } catch (err) {
+      console.warn('[Exporter] Fallback video element init failed for ${assetId}:', err);
+      return null;
     }
   }
 
@@ -451,13 +511,22 @@ export async function exportProjectWebCodecs(
   const cleanupOnExit = () => {
     try { if (videoEncoder.state !== 'closed') videoEncoder.close(); } catch { /* ignore */ }
     try { if (audioEncoder && audioEncoder.state !== 'closed') audioEncoder.close(); } catch { /* ignore */ }
-    videoElements.forEach((video) => { URL.revokeObjectURL(video.src); video.remove(); });
+    videoElements.forEach(({ video, url }) => {
+      video.pause();
+      video.src = '';
+      try { video.load(); } catch { /* ignore */ }
+      URL.revokeObjectURL(url);
+      video.remove();
+    });
+    videoElements.clear();
     imageElements.forEach((img) => { URL.revokeObjectURL(img.src); });
-    videoReaders.forEach((reader) => {
+    imageElements.clear();
+    videoReaders.forEach(({ reader }) => {
       try {
         reader.close();
       } catch { /* ignore */ }
     });
+    videoReaders.clear();
   };
 
   // 6. Draw and Encode video frame by frame
@@ -495,9 +564,9 @@ export async function exportProjectWebCodecs(
           const offset = timeMs - clip.positionMs;
           const sourceTime = (clip.trimStartMs + offset * speed) / 1000;
 
-          // Attempt WebCodecs frame decode
+          // Attempt on-demand WebCodecs frame decode from bounded pool
           let frameToDraw: VideoFrame | null = null;
-          const reader = videoReaders.get(clip.id);
+          const reader = await getOrInitVideoReader(clip, f);
           if (reader) {
             try {
               frameToDraw = await reader.getFrameAt(sourceTime);
@@ -506,7 +575,7 @@ export async function exportProjectWebCodecs(
             }
           }
 
-          const fallbackVideo = clip.assetId ? videoElements.get(clip.assetId) : null;
+          const fallbackVideo = (!frameToDraw && clip.assetId) ? await getOrInitFallbackVideo(clip.assetId, f) : null;
           if (!frameToDraw && fallbackVideo) {
             fallbackVideo.currentTime = sourceTime;
             await new Promise<void>((resolve) => {
@@ -567,7 +636,7 @@ export async function exportProjectWebCodecs(
             if (prevClip) {
               const prevTime = prevClip.trimEndMs / 1000;
               let prevFrameToDraw: VideoFrame | null = null;
-              const prevReader = videoReaders.get(prevClip.id);
+              const prevReader = await getOrInitVideoReader(prevClip, f);
               if (prevReader) {
                 try {
                   prevFrameToDraw = await prevReader.getFrameAt(prevTime);
@@ -576,11 +645,18 @@ export async function exportProjectWebCodecs(
                 }
               }
 
-              const prevVideo = prevClip.assetId ? videoElements.get(prevClip.assetId) : null;
+              const prevVideo = (!prevFrameToDraw && prevClip.assetId) ? await getOrInitFallbackVideo(prevClip.assetId, f) : null;
               if (!prevFrameToDraw && prevVideo) {
                 prevVideo.currentTime = prevTime;
-                await new Promise((resolve) => {
-                  prevVideo.onseeked = resolve;
+                await new Promise<void>((resolve) => {
+                  let resolved = false;
+                  const onSeeked = () => {
+                    if (resolved) return;
+                    resolved = true;
+                    resolve();
+                  };
+                  prevVideo.onseeked = onSeeked;
+                  setTimeout(onSeeked, 500);
                 });
               }
 
@@ -602,9 +678,11 @@ export async function exportProjectWebCodecs(
                 pdx = (renderWidth - pdWidth) / 2;
               }
 
-              ctx.save();
-              ctx.drawImage(prevFrameToDraw || prevVideo!, pdx, pdy, pdWidth, pdHeight);
-              ctx.restore();
+              if (prevFrameToDraw || prevVideo) {
+                ctx.save();
+                ctx.drawImage((prevFrameToDraw || prevVideo)!, pdx, pdy, pdWidth, pdHeight);
+                ctx.restore();
+              }
 
               if (prevFrameToDraw) {
                 prevFrameToDraw.close();

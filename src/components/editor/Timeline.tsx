@@ -319,9 +319,10 @@ export default function Timeline({ height }: { height: number }) {
     return () => document.removeEventListener('mousedown', handler);
   }, [contextMenu, closeContextMenu]);
 
-  // Background video thumbnail extractor
+  // Background video thumbnail extractor (Sequential queue to preserve hardware decoders)
   useEffect(() => {
     if (!project) return;
+    let active = true;
     
     // Find all video assets on the timeline not yet cached
     const videoClips = project.tracks
@@ -329,143 +330,201 @@ export default function Timeline({ height }: { height: number }) {
       .flatMap(t => t.clips)
       .filter(c => c.assetId && !thumbnailCacheRef.current[c.assetId]);
       
-    videoClips.forEach(async (clip) => {
-      if (!clip.assetId) return;
-      const assetId = clip.assetId;
-      // Mark as in-progress immediately to prevent duplicate extractions
-      thumbnailCacheRef.current[assetId] = [];
-      
-      try {
-        const asset = await db.assets.get(assetId);
-        if (!asset) return;
-
-        const { getFileFromOPFS } = await import('../../lib/opfs');
-        const file = await getFileFromOPFS(asset.opfsPath);
-        const objectUrl = URL.createObjectURL(file);
+    const processThumbnails = async () => {
+      for (const clip of videoClips) {
+        if (!active) break;
+        if (!clip.assetId) continue;
+        const assetId = clip.assetId;
+        if (thumbnailCacheRef.current[assetId] && thumbnailCacheRef.current[assetId].length > 0) continue;
         
-        if (asset.type.startsWith('image/')) {
-          // Fast single-frame extraction for image assets
-          const img = new Image();
-          img.src = objectUrl;
-          await new Promise((resolve, reject) => {
-            img.onload = resolve;
-            img.onerror = reject;
-          });
-          
-          const canvas = document.createElement('canvas');
-          const aspect = img.naturalWidth / (img.naturalHeight || 1);
-          canvas.height = 180;
-          canvas.width = Math.round(180 * aspect);
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            const frame = canvas.toDataURL('image/jpeg', 0.6);
-            setThumbnailCache(prev => {
-              const updated = { ...prev, [assetId]: [frame] };
-              thumbnailCacheRef.current = updated;
-              return updated;
-            });
-          }
-          URL.revokeObjectURL(objectUrl);
-        } else {
-          // Standard multi-frame seek for video assets
-          const video = document.createElement('video');
-          video.src = objectUrl;
-          video.muted = true;
-          video.playsInline = true;
-          video.preload = 'metadata';
-          
-          await new Promise((resolve) => {
-            video.onloadedmetadata = resolve;
-          });
+        // Mark as in-progress immediately to prevent duplicate extractions
+        thumbnailCacheRef.current[assetId] = [];
+        
+        try {
+          const asset = await db.assets.get(assetId);
+          if (!asset || !active) continue;
 
-          const duration = video.duration;
-          // If the file is larger than 500MB, extract only 1 frame to avoid decoder choking
-          const numFrames = asset.size > 500 * 1024 * 1024 ? 1 : 10;
-          const frames: string[] = [];
+          const { getFileFromOPFS } = await import('../../lib/opfs');
+          const file = await getFileFromOPFS(asset.opfsPath);
+          if (!active) continue;
+          const objectUrl = URL.createObjectURL(file);
           
-          const canvas = document.createElement('canvas');
-          const videoWidth = video.videoWidth || 320;
-          const videoHeight = video.videoHeight || 180;
-          const aspect = videoWidth / videoHeight;
-          
-          canvas.height = 180;
-          canvas.width = Math.round(180 * aspect);
-          const ctx = canvas.getContext('2d');
-          
-          for (let i = 0; i < numFrames; i++) {
-            const targetTime = (duration / (numFrames + 1)) * (i + 1);
-            video.currentTime = targetTime;
-            
-            await new Promise((resolve) => {
-              video.onseeked = resolve;
+          if (asset.type.startsWith('image/')) {
+            // Fast single-frame extraction for image assets
+            await new Promise<void>((resolve) => {
+              const img = new Image();
+              img.src = objectUrl;
+              const cleanup = () => {
+                URL.revokeObjectURL(objectUrl);
+                resolve();
+              };
+              const t = setTimeout(cleanup, 4000);
+              img.onload = () => {
+                clearTimeout(t);
+                if (active) {
+                  const canvas = document.createElement('canvas');
+                  const aspect = img.naturalWidth / (img.naturalHeight || 1);
+                  canvas.height = 90;
+                  canvas.width = Math.round(90 * aspect);
+                  const ctx = canvas.getContext('2d');
+                  if (ctx) {
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    const frame = canvas.toDataURL('image/jpeg', 0.5);
+                    const updated = { ...thumbnailCacheRef.current, [assetId]: [frame] };
+                    thumbnailCacheRef.current = updated;
+                    setThumbnailCache(updated);
+                  }
+                }
+                cleanup();
+              };
+              img.onerror = () => {
+                clearTimeout(t);
+                cleanup();
+              };
             });
-            
-            if (ctx) {
-              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-              frames.push(canvas.toDataURL('image/jpeg', 0.6));
-            }
+          } else {
+            // Standard multi-frame seek with safety timeout
+            await new Promise<void>((resolve) => {
+              const video = document.createElement('video');
+              video.src = objectUrl;
+              video.muted = true;
+              video.playsInline = true;
+              video.preload = 'metadata';
+              
+              let resolved = false;
+              const cleanup = () => {
+                if (resolved) return;
+                resolved = true;
+                URL.revokeObjectURL(objectUrl);
+                video.remove();
+                resolve();
+              };
+
+              const timeoutId = setTimeout(cleanup, 8000);
+
+              video.onloadedmetadata = async () => {
+                try {
+                  const duration = video.duration || 1;
+                  // Cap number of filmstrip frames to 6 for optimal performance & memory
+                  const numFrames = asset.size > 200 * 1024 * 1024 ? 3 : 6;
+                  const frames: string[] = [];
+                  
+                  const canvas = document.createElement('canvas');
+                  const videoWidth = video.videoWidth || 320;
+                  const videoHeight = video.videoHeight || 180;
+                  const aspect = videoWidth / videoHeight;
+                  
+                  canvas.height = 60;
+                  canvas.width = Math.round(60 * aspect);
+                  const ctx = canvas.getContext('2d');
+                  
+                  for (let i = 0; i < numFrames; i++) {
+                    if (!active) break;
+                    const targetTime = (duration / (numFrames + 1)) * (i + 1);
+                    video.currentTime = targetTime;
+                    
+                    await new Promise<void>((r) => {
+                      const seekTimeout = setTimeout(r, 1200);
+                      video.onseeked = () => {
+                        clearTimeout(seekTimeout);
+                        r();
+                      };
+                      video.onerror = () => {
+                        clearTimeout(seekTimeout);
+                        r();
+                      };
+                    });
+                    
+                    if (ctx && active) {
+                      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                      frames.push(canvas.toDataURL('image/jpeg', 0.5));
+                    }
+                  }
+                  
+                  if (active && frames.length > 0) {
+                    const updated = { ...thumbnailCacheRef.current, [assetId]: frames };
+                    thumbnailCacheRef.current = updated;
+                    setThumbnailCache(updated);
+                  }
+                } catch {
+                  // Ignore seek errors
+                } finally {
+                  clearTimeout(timeoutId);
+                  cleanup();
+                }
+              };
+
+              video.onerror = () => {
+                clearTimeout(timeoutId);
+                cleanup();
+              };
+            });
           }
-          
-          setThumbnailCache(prev => {
-            const updated = { ...prev, [assetId]: frames };
-            thumbnailCacheRef.current = updated;
-            return updated;
-          });
-          
-          URL.revokeObjectURL(objectUrl);
-          video.remove();
+        } catch (error) {
+          console.error(`Failed to extract thumbnails for asset ${assetId}:`, error);
         }
-      } catch (error) {
-        console.error(`Failed to extract thumbnails for asset ${assetId}:`, error);
       }
-    });
+    };
+
+    processThumbnails();
+
+    return () => {
+      active = false;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
 
-  // Real PCM Waveform extractor for audio/video clips
+  // Real PCM Waveform extractor for audio/video clips (Sequential queue)
   useEffect(() => {
     if (!project) return;
+    let active = true;
+
     const clips = project.tracks
       .filter(t => t.type === 'audio' || t.type === 'video')
       .flatMap(t => t.clips)
       .filter(c => c.assetId && !waveformCacheRef.current[c.assetId]);
 
-    clips.forEach(async (clip) => {
-      if (!clip.assetId) return;
-      const assetId = clip.assetId;
-      waveformCacheRef.current[assetId] = [];
-      try {
-        const asset = await db.assets.get(assetId);
-        if (!asset) return;
+    const processWaveforms = async () => {
+      for (const clip of clips) {
+        if (!active) break;
+        if (!clip.assetId) continue;
+        const assetId = clip.assetId;
+        waveformCacheRef.current[assetId] = [];
 
-        // 1. Check if peaks are already cached in IndexedDB
-        if (asset.waveformPeaks && asset.waveformPeaks.length > 0) {
-          setWaveformCache(prev => {
-            const updated = { ...prev, [assetId]: asset.waveformPeaks! };
+        try {
+          const asset = await db.assets.get(assetId);
+          if (!asset || !active) continue;
+
+          // 1. Check if peaks are already cached in IndexedDB
+          if (asset.waveformPeaks && asset.waveformPeaks.length > 0) {
+            const updated = { ...waveformCacheRef.current, [assetId]: asset.waveformPeaks };
             waveformCacheRef.current = updated;
-            return updated;
-          });
-          return;
-        }
+            setWaveformCache(updated);
+            continue;
+          }
 
-        // 2. Fallback: generate dynamically if not present
-        if (asset.type.startsWith('image/')) return;
-        const { generateWaveformPeaks } = await import('../../lib/waveform-generator');
-        const peaks = await generateWaveformPeaks(asset.opfsPath);
+          // 2. Fallback: generate dynamically one by one
+          if (asset.type.startsWith('image/')) continue;
+          const { generateWaveformPeaks } = await import('../../lib/waveform-generator');
+          const peaks = await generateWaveformPeaks(asset.opfsPath);
 
-        if (peaks.length > 0) {
-          await db.assets.update(assetId, { waveformPeaks: peaks });
-          setWaveformCache(prev => {
-            const updated = { ...prev, [assetId]: peaks };
+          if (peaks.length > 0 && active) {
+            await db.assets.update(assetId, { waveformPeaks: peaks });
+            const updated = { ...waveformCacheRef.current, [assetId]: peaks };
             waveformCacheRef.current = updated;
-            return updated;
-          });
+            setWaveformCache(updated);
+          }
+        } catch (e) {
+          console.warn('Waveform extraction failed for', assetId, e);
         }
-      } catch (e) {
-        console.warn('Waveform extraction failed for', assetId, e);
       }
-    });
+    };
+
+    processWaveforms();
+
+    return () => {
+      active = false;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
 

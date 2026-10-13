@@ -6,20 +6,33 @@ export function getMediaMetadata(file: File): Promise<{ durationMs: number; widt
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);
     const isAudio = file.type.startsWith('audio/');
-    
+    let settled = false;
+
+    const finalize = (result: { durationMs: number; width?: number; height?: number }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+      resolve(result);
+    };
+
+    // 6s safety timeout prevents hanging indefinitely on unparseable / broken containers
+    const timer = setTimeout(() => {
+      console.warn(`[getMediaMetadata] Metadata read timeout for ${file.name}; fallback default used.`);
+      finalize({ durationMs: 5000, width: isAudio ? undefined : 1920, height: isAudio ? undefined : 1080 });
+    }, 6000);
+
     if (isAudio) {
       const audio = new Audio();
       audio.src = url;
       audio.preload = 'metadata';
       audio.onloadedmetadata = () => {
-        URL.revokeObjectURL(url);
-        resolve({
-          durationMs: Math.round(audio.duration * 1000)
+        finalize({
+          durationMs: Math.round((audio.duration && !isNaN(audio.duration) ? audio.duration : 5) * 1000)
         });
       };
       audio.onerror = () => {
-        URL.revokeObjectURL(url);
-        resolve({ durationMs: 0 });
+        finalize({ durationMs: 5000 });
       };
     } else {
       const video = document.createElement('video');
@@ -27,19 +40,19 @@ export function getMediaMetadata(file: File): Promise<{ durationMs: number; widt
       video.preload = 'metadata';
       video.muted = true;
       video.playsInline = true;
-      
+
       video.onloadedmetadata = () => {
-        URL.revokeObjectURL(url);
-        resolve({
-          durationMs: Math.round(video.duration * 1000),
+        finalize({
+          durationMs: Math.round((video.duration && !isNaN(video.duration) ? video.duration : 5) * 1000),
           width: video.videoWidth || undefined,
           height: video.videoHeight || undefined
         });
+        video.remove();
       };
-      
+
       video.onerror = () => {
-        URL.revokeObjectURL(url);
-        resolve({ durationMs: 0 });
+        finalize({ durationMs: 5000 });
+        video.remove();
       };
     }
   });
