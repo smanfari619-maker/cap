@@ -19,6 +19,7 @@ import AudioDenoiserTool from './AudioDenoiserTool';
 import AIVideoGeneratorTool from './AIVideoGeneratorTool';
 import { BUILTIN_TEMPLATES, applyTemplate } from '../../lib/template-engine';
 import { downloadProjectBackup, generateShareLink } from '../../lib/cloud-sync';
+import DownloadAppModal from './DownloadAppModal';
 
 export default function Dashboard() {
   const loadProject = useEditorStore(state => state.loadProject);
@@ -32,6 +33,8 @@ export default function Dashboard() {
   const [selectedTemplateCategory, setSelectedTemplateCategory] = useState<string>('all');
   const [openSettingsModal, setOpenSettingsModal] = useState(false);
   const [openHelpModal, setOpenHelpModal] = useState(false);
+  const [openDownloadModal, setOpenDownloadModal] = useState(false);
+  const isElectron = typeof window !== 'undefined' && Boolean((window as any).electron?.isElectron);
 
   // New Project Form State
   const [title, setTitle] = useState('');
@@ -325,7 +328,34 @@ export default function Dashboard() {
 
   const renderHomeView = () => {
     return (
-      <div className="flex flex-col gap-8 animate-fade-in-up w-full">
+      <div className="flex flex-col gap-6 animate-fade-in-up w-full">
+        {/* Native Desktop Banner (shown on web) */}
+        {!isElectron && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-2xl border border-violet-500/20 bg-gradient-to-r from-violet-950/30 via-zinc-900/60 to-sky-950/30 backdrop-blur-md">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-sky-500 flex items-center justify-center text-white shrink-0 shadow-md">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-white flex items-center gap-2">
+                  Jellycut for Desktop is here!
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 font-semibold">New</span>
+                </h4>
+                <p className="text-[11px] text-zinc-400">
+                  Enjoy 4K 60FPS hardware rendering, 8GB+ memory, and direct local file access on macOS &amp; Windows.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setOpenDownloadModal(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-xs shrink-0 transition-transform hover:scale-105 active:scale-95 shadow-md cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Download App
+            </button>
+          </div>
+        )}
+
         {/* Hero CTA Card */}
         <div 
           onClick={() => setIsCreating(true)}
@@ -1247,6 +1277,19 @@ export default function Dashboard() {
 
         {/* Bottom Actions */}
         <div className="flex flex-col gap-3 w-full">
+          {!isElectron && (
+            <button
+              onClick={() => setOpenDownloadModal(true)}
+              title="Download Desktop App (Mac & Windows)"
+              className="nav-rail-item w-full group relative"
+            >
+              <div className="relative">
+                <Download className="w-5 h-5 text-violet-400 group-hover:text-violet-300 transition-colors" />
+                <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-violet-500 animate-pulse" />
+              </div>
+              <span className="text-[9px] font-bold tracking-wide mt-0.5 leading-none text-violet-400">Desktop</span>
+            </button>
+          )}
           <button
             onClick={() => setOpenSettingsModal(true)}
             title="Settings"
@@ -1300,6 +1343,15 @@ export default function Dashboard() {
                   </span>
                 </div>
                 <div className="flex items-center gap-3 text-zinc-400">
+                  {!isElectron && (
+                    <button
+                      onClick={() => setOpenDownloadModal(true)}
+                      className="cursor-pointer text-violet-400 hover:text-violet-300 transition"
+                      title="Download Desktop App"
+                    >
+                      <Download className="w-5 h-5" />
+                    </button>
+                  )}
                   <Search className="w-5 h-5 cursor-pointer hover:text-zinc-205" />
                   <HelpCircle className="w-5 h-5 cursor-pointer hover:text-zinc-205" />
                   <Settings className="w-5 h-5 cursor-pointer hover:text-zinc-205" />
@@ -1871,6 +1923,9 @@ export default function Dashboard() {
 
       {/* Help Modal */}
       {renderHelpModal()}
+
+      {/* Desktop App Download Modal */}
+      <DownloadAppModal isOpen={openDownloadModal} onClose={() => setOpenDownloadModal(false)} />
 
     </div>
   );

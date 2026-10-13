@@ -3,11 +3,18 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:electron-scripts": "esbuild electron/main.ts --bundle --platform=node --target=node20 --external:electron --outfile=dist-electron/main.cjs && esbuild electron/preload.ts --bundle --platform=node --target=node20 --external:electron --outfile=dist-electron/preload.cjs",
+    "dev:electron": "npm run build:electron-scripts && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 concurrently -k \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
+    "build:app": "npm run build && npm run build:electron-scripts",
+    "package:mac": "npm run build:app && electron-builder --mac",
+    "package:win": "npm run build:app && electron-builder --win",
+    "package:all": "npm run build:app && electron-builder -mw"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",
@@ -34,9 +41,15 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "concurrently": "^10.0.6",
+    "cross-env": "^10.1.0",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
     "oxlint": "^1.69.0",
     "tailwindcss": "^4.3.1",
     "typescript": "~6.0.2",
-    "vite": "^8.1.0"
+    "vite": "^8.1.0",
+    "wait-on": "^9.5.1"
   }
 }
