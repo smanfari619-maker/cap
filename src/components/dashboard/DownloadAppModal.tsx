@@ -225,6 +225,14 @@ export default function DownloadAppModal({ isOpen, onClose }: DownloadAppModalPr
               </div>
             </div>
 
+            {/* macOS First-time Tip */}
+            <div className="mb-6 p-3.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-[11px] text-zinc-300 flex items-start gap-2.5">
+              <span className="text-violet-400 font-bold shrink-0">macOS Tip:</span>
+              <span>
+                If macOS shows a warning on first open (Gatekeeper quarantine for browser downloads), drag Jellycut to your <strong>Applications</strong> folder, then right-click and choose <strong>Open</strong>, or run <code className="text-violet-300 bg-zinc-900 px-1.5 py-0.5 rounded font-mono text-[10px]">xattr -cr /Applications/Jellycut.app</code> once in Terminal.
+              </span>
+            </div>
+
             {/* Performance Advantages Strip */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 rounded-2xl bg-zinc-950/60 border border-white/5">
               <div className="flex items-start gap-3">
