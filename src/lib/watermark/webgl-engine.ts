@@ -86,25 +86,44 @@ export class WebGLWatermarkEngine {
         }
 
         // 1. Sample boundary background colors (outside u_rect)
-        vec4 bgLeft  = texture2D(u_current, vec2(clamp(u_rect.x - 0.015, 0.0, 1.0), v_texCoord.y));
-        vec4 bgRight = texture2D(u_current, vec2(clamp(u_rect.x + u_rect.z + 0.015, 0.0, 1.0), v_texCoord.y));
-        vec4 bgTop   = texture2D(u_current, vec2(v_texCoord.x, clamp(u_rect.y + u_rect.w + 0.015, 0.0, 1.0)));
-        vec4 bgBot   = texture2D(u_current, vec2(v_texCoord.x, clamp(u_rect.y - 0.015, 0.0, 1.0)));
+        vec3 bgSum = vec3(0.0);
+        float bgWeight = 0.0;
 
-        vec4 bgEst = (bgLeft + bgRight + bgTop + bgBot) * 0.25;
+        if (u_rect.x > 0.02) {
+            bgSum += texture2D(u_current, vec2(clamp(u_rect.x - 0.015, 0.001, 0.999), v_texCoord.y)).rgb;
+            bgWeight += 1.0;
+        }
+        if (u_rect.x + u_rect.z < 0.98) {
+            bgSum += texture2D(u_current, vec2(clamp(u_rect.x + u_rect.z + 0.015, 0.001, 0.999), v_texCoord.y)).rgb;
+            bgWeight += 1.0;
+        }
+        if (u_rect.y + u_rect.w < 0.98) {
+            bgSum += texture2D(u_current, vec2(v_texCoord.x, clamp(u_rect.y + u_rect.w + 0.015, 0.001, 0.999))).rgb;
+            bgWeight += 1.0;
+        }
+        if (u_rect.y > 0.02) {
+            bgSum += texture2D(u_current, vec2(v_texCoord.x, clamp(u_rect.y - 0.015, 0.001, 0.999))).rgb;
+            bgWeight += 1.0;
+        }
+
+        vec3 bgEst = bgWeight > 0.0 ? (bgSum / bgWeight) : current.rgb;
 
         // 2. Tight Masking: Calculate color distance from background
-        float colorDist = distance(current.rgb, bgEst.rgb);
+        float colorDist = distance(current.rgb, bgEst);
 
-        // If pixel is background (not text), keep original wood texture!
+        // If pixel is background (not text), keep original texture!
         if (colorDist < 0.08) {
             gl_FragColor = current;
             return;
         }
 
-        // 3. Exemplar Patch Matching: Sample clean wood texture offset from outside u_rect
+        // 3. Exemplar Patch Matching: Sample clean texture offset from outside u_rect
         vec2 patchOffset = vec2(-u_rect.z * 1.2, 0.0);
-        if (u_rect.x < 0.2) patchOffset = vec2(u_rect.z * 1.2, 0.0);
+        if (u_rect.x < 0.2) {
+            patchOffset = vec2(u_rect.z * 1.2, 0.0);
+        } else if (u_rect.y < 0.2 && u_rect.x > 0.8) {
+            patchOffset = vec2(-u_rect.z * 1.2, u_rect.w * 0.5);
+        }
 
         vec2 sampleCoord = vec2(
             clamp(v_texCoord.x + patchOffset.x, 0.001, 0.999),
@@ -114,7 +133,7 @@ export class WebGLWatermarkEngine {
         vec4 exemplarColor = texture2D(u_current, sampleCoord);
 
         // Blend exemplar texture with structural background estimation
-        vec3 blended = mix(bgEst.rgb, exemplarColor.rgb, 0.75);
+        vec3 blended = mix(bgEst, exemplarColor.rgb, 0.75);
 
         // 4. High-Frequency Micro-Texture/Grain Injection (prevents flat blur)
         float grain = (rand(v_texCoord * u_resolution) - 0.5) * 0.035;
@@ -237,6 +256,26 @@ export class WebGLWatermarkEngine {
     }
     
     return this.canvas;
+  }
+
+  public getCanvas(): HTMLCanvasElement {
+    return this.canvas;
+  }
+
+  public destroy(): void {
+    const gl = this.gl;
+    try {
+      if (this.sourceTexture) gl.deleteTexture(this.sourceTexture);
+      if (this.texA) gl.deleteTexture(this.texA);
+      if (this.texB) gl.deleteTexture(this.texB);
+      if (this.fboA) gl.deleteFramebuffer(this.fboA);
+      if (this.fboB) gl.deleteFramebuffer(this.fboB);
+      if (this.positionBuffer) gl.deleteBuffer(this.positionBuffer);
+      if (this.texCoordBuffer) gl.deleteBuffer(this.texCoordBuffer);
+      if (this.translucentProgram) gl.deleteProgram(this.translucentProgram);
+      if (this.harmonicProgram) gl.deleteProgram(this.harmonicProgram);
+      if (this.copyProgram) gl.deleteProgram(this.copyProgram);
+    } catch { /* ignore cleanup error */ }
   }
 
   private createProgram(gl: WebGLRenderingContext, vs: string, fs: string) {

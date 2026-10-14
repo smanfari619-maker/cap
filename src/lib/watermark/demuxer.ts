@@ -44,7 +44,10 @@ export function demuxMP4(arrayBuffer: ArrayBuffer): Promise<DemuxedVideo> {
         if (box) {
           const stream = new DataStream(undefined, 0, Endianness.BIG_ENDIAN);
           box.write(stream);
-          description = new Uint8Array(stream.buffer, 8);
+          const endPos = stream.getPosition();
+          if (endPos > 8) {
+            description = new Uint8Array(stream.buffer.slice(8, endPos));
+          }
         }
       } catch { /* codec description is optional */ }
 

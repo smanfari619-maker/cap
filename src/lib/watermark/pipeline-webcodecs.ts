@@ -12,6 +12,7 @@ import { CFG }            from './config';
 import { demuxMP4 }       from './demuxer';
 import { makeVideoMuxer, makeVideoEncoder, muxAudio, finalizeMuxer, canMuxAudio } from './encoder';
 import { inpaintRegion }  from './inpaint-telea';
+import { WebGLWatermarkEngine } from './webgl-engine';
 
 /**
  * Returns estimated Gemini watermark region based on video resolution.
@@ -55,6 +56,14 @@ export async function pipelineWebCodecs(
   canvas.width = normW; canvas.height = normH;
   const ctx    = canvas.getContext('2d', { willReadFrequently: true })!;
 
+  // Hardware-accelerated GPU WebGL engine (~1ms per frame instead of 3000ms CPU)
+  let webglEngine: WebGLWatermarkEngine | null = null;
+  try {
+    webglEngine = new WebGLWatermarkEngine(normW, normH);
+  } catch (err) {
+    console.warn('[WM/WebCodecs] WebGL engine unavailable, using optimized CPU inpaint:', err);
+  }
+
   // ── 3. WebCodecs Decode & Encode Loop ────────────────────────────────────────
   const audioOk = await canMuxAudio(audio);
   const muxer = makeVideoMuxer(normW, normH, audio, audioOk);
@@ -62,11 +71,28 @@ export async function pipelineWebCodecs(
 
   const queue: VideoFrame[] = [];
   let resolver: (() => void) | null = null;
+  let rejecter: ((err: Error) => void) | null = null;
   let decErr : Error | null = null;
 
   const dec = new VideoDecoder({
-    output: frame => { queue.push(frame); resolver?.(); resolver = null; },
-    error : e     => { decErr = e; },
+    output: frame => {
+      queue.push(frame);
+      if (resolver) {
+        const r = resolver;
+        resolver = null;
+        rejecter = null;
+        r();
+      }
+    },
+    error : e => {
+      decErr = e instanceof Error ? e : new Error(String(e));
+      if (rejecter) {
+        const rej = rejecter;
+        resolver = null;
+        rejecter = null;
+        rej(decErr);
+      }
+    },
   });
   dec.configure({
     codec      : demuxed.codec,
@@ -76,12 +102,15 @@ export async function pipelineWebCodecs(
   });
 
   let fed = 0;
+  let processedFrames = 0;
+  const totalFrames = demuxed.samples.length;
+
   try {
-    for (let i = 0; i < demuxed.samples.length; i++) {
+    for (let i = 0; i < totalFrames; i++) {
       if (decErr) throw decErr;
 
-      // Feed chunks ahead to saturate the decoder
-      while (fed < demuxed.samples.length && queue.length < CFG.DECODE_QUEUE_LIMIT) {
+      // Paced backpressure: feed decoder chunks without saturating memory
+      while (fed < totalFrames && dec.decodeQueueSize < CFG.DECODE_QUEUE_LIMIT) {
         const s = demuxed.samples[fed++];
         dec.decode(new EncodedVideoChunk({
           type     : s.is_sync ? 'key' : 'delta',
@@ -92,11 +121,31 @@ export async function pipelineWebCodecs(
       }
 
       if (queue.length === 0) {
-        if (fed >= demuxed.samples.length) await dec.flush();
+        if (fed >= totalFrames && dec.state === 'configured') {
+          await dec.flush();
+        }
+        if (queue.length === 0 && fed < totalFrames) {
+          while (fed < totalFrames && dec.decodeQueueSize < CFG.DECODE_QUEUE_LIMIT * 2) {
+            const s = demuxed.samples[fed++];
+            dec.decode(new EncodedVideoChunk({
+              type     : s.is_sync ? 'key' : 'delta',
+              timestamp: (s.cts * 1_000_000) / s.timescale,
+              duration : (s.duration * 1_000_000) / s.timescale,
+              data     : s.data,
+            }));
+          }
+        }
         if (queue.length === 0) {
+          if (fed >= totalFrames) break;
           await new Promise<void>((res, rej) => {
-            resolver = res;
-            setTimeout(() => rej(new Error('Decode timeout')), CFG.DECODE_TIMEOUT_MS);
+            let timer: any = null;
+            resolver = () => { if (timer) clearTimeout(timer); res(); };
+            rejecter = (err) => { if (timer) clearTimeout(timer); rej(err); };
+            timer = setTimeout(() => {
+              resolver = null;
+              rejecter = null;
+              rej(new Error('Decode timeout'));
+            }, CFG.DECODE_TIMEOUT_MS);
           });
         }
       }
@@ -104,24 +153,38 @@ export async function pipelineWebCodecs(
 
       const frame = queue.shift()!;
 
-      // Draw frame → inpaint → encode
-      ctx.drawImage(frame, 0, 0, normW, normH);
-      const imageData  = ctx.getImageData(0, 0, normW, normH);
-      const inpainted  = inpaintRegion(imageData, activeRegion);
-      ctx.putImageData(inpainted, 0, 0);
-
-      const out = new VideoFrame(canvas, { timestamp: frame.timestamp });
-      try { enc.encode(out); } finally { out.close(); }
+      // Draw frame → inpaint (GPU WebGL or fast CPU) → encode
+      if (webglEngine) {
+        ctx.drawImage(frame, 0, 0, normW, normH);
+        webglEngine.processFrame(canvas, activeRegion, mode);
+        const out = new VideoFrame(webglEngine.getCanvas(), { timestamp: frame.timestamp });
+        try { enc.encode(out); } finally { out.close(); }
+      } else {
+        ctx.drawImage(frame, 0, 0, normW, normH);
+        const imageData  = ctx.getImageData(0, 0, normW, normH);
+        const inpainted  = inpaintRegion(imageData, activeRegion);
+        ctx.putImageData(inpainted, 0, 0);
+        const out = new VideoFrame(canvas, { timestamp: frame.timestamp });
+        try { enc.encode(out); } finally { out.close(); }
+      }
       frame.close();
+      processedFrames++;
 
-      onProgress?.(0.18 + (i / demuxed.samples.length) * 0.72);
-      if (i % CFG.YIELD_EVERY_N_FRAMES === 0) await new Promise(r => setTimeout(r, 0));
+      onProgress?.(0.18 + (processedFrames / totalFrames) * 0.72);
+      if (processedFrames % CFG.YIELD_EVERY_N_FRAMES === 0) {
+        await new Promise(r => setTimeout(r, 0));
+      }
     }
 
-    await enc.flush(); enc.close(); dec.close();
+    await enc.flush();
+    enc.close();
+    dec.close();
+    if (webglEngine) webglEngine.destroy();
+
     if (audioOk && audio) { onProgress?.(0.92); await muxAudio(muxer, audio); }
     onProgress?.(0.97);
   } catch (err) {
+    if (webglEngine) webglEngine.destroy();
     try { if (enc.state !== 'closed') enc.close(); } catch { /* ignore */ }
     try { if (dec.state !== 'closed') dec.close(); } catch { /* ignore */ }
     throw err;

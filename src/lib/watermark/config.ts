@@ -15,6 +15,6 @@ export const CFG = {
   DECODE_QUEUE_LIMIT: 12,
   DECODE_TIMEOUT_MS:   8_000,
 
-  // Yield to the main thread every N frames (keeps UI responsive)
-  YIELD_EVERY_N_FRAMES: 20,
+  // Yield to the main thread every N frames (keeps UI responsive and progress bar smooth)
+  YIELD_EVERY_N_FRAMES: 2,
 } as const;

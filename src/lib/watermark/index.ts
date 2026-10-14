@@ -72,26 +72,53 @@ function hasWebCodecs(): boolean {
   return typeof VideoDecoder !== 'undefined' && typeof VideoEncoder !== 'undefined';
 }
 
-async function extractFirstFrame(file: File, vw: number, vh: number): Promise<ImageData> {
+async function loadVideoMetadata(file: File): Promise<{ el: HTMLVideoElement; cleanup: () => void }> {
   const url = URL.createObjectURL(file);
-  const el = Object.assign(document.createElement('video'), {
-    src: url, muted: true, preload: 'metadata', playsInline: true,
-  });
-  await new Promise<void>((res, rej) => {
-    const timer = setTimeout(() => rej(new Error('Failed to read video metadata (timeout)')), 6000);
-    el.onloadedmetadata = () => { clearTimeout(timer); res(); };
-    el.onerror = () => { clearTimeout(timer); rej(new Error('Failed to read video metadata')); };
-  });
+  const el = document.createElement('video');
+  el.src = url;
+  el.muted = true;
+  el.playsInline = true;
+  el.preload = 'metadata';
+  el.style.position = 'fixed';
+  el.style.top = '-9999px';
+  el.style.left = '-9999px';
+  el.style.width = '1px';
+  el.style.height = '1px';
+  el.style.opacity = '0';
+  el.style.pointerEvents = 'none';
+  document.body.appendChild(el);
 
-  await seekVideoToTime(el, 0.1, 800);
-  
-  const canvas = document.createElement('canvas');
-  canvas.width = vw; canvas.height = vh;
-  const ctx = canvas.getContext('2d')!;
-  ctx.drawImage(el, 0, 0, vw, vh);
-  URL.revokeObjectURL(url);
-  el.remove();
-  return ctx.getImageData(0, 0, vw, vh);
+  const cleanup = () => {
+    if (el.parentNode) el.parentNode.removeChild(el);
+    URL.revokeObjectURL(url);
+  };
+
+  try {
+    await new Promise<void>((res, rej) => {
+      const timer = setTimeout(() => rej(new Error('Timeout loading video metadata')), 8000);
+      el.onloadedmetadata = () => { clearTimeout(timer); res(); };
+      el.onerror = () => { clearTimeout(timer); rej(new Error('Failed to read video metadata')); };
+      el.load();
+    });
+    return { el, cleanup };
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+}
+
+async function extractFirstFrame(file: File, vw: number, vh: number): Promise<ImageData> {
+  const { el, cleanup } = await loadVideoMetadata(file);
+  try {
+    await seekVideoToTime(el, 0.1, 800);
+    const canvas = document.createElement('canvas');
+    canvas.width = vw; canvas.height = vh;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(el, 0, 0, vw, vh);
+    return ctx.getImageData(0, 0, vw, vh);
+  } finally {
+    cleanup();
+  }
 }
 
 async function runBestPipeline(
@@ -181,21 +208,16 @@ export async function removeWatermarkFromVideoFile(
   mode      : 'translucent' | 'opaque' = 'opaque',
   onProgress?: (progress: number) => void
 ): Promise<ArrayBuffer> {
-  const url = URL.createObjectURL(file);
-  const el = Object.assign(document.createElement('video'), {
-    src: url, muted: true, preload: 'metadata', playsInline: true,
-  });
-  await new Promise<void>((res, rej) => {
-    const timer = setTimeout(() => rej(new Error('Timeout loading video metadata')), 8000);
-    el.onloadedmetadata = () => { clearTimeout(timer); res(); };
-    el.onerror = () => { clearTimeout(timer); rej(new Error('Failed to read video metadata')); };
-  });
+  const { el, cleanup } = await loadVideoMetadata(file);
   const { videoWidth: vw, videoHeight: vh } = el;
-  URL.revokeObjectURL(url);
-  el.remove();
+  cleanup();
 
   const audio = await extractAudio(file);
-  return runBestPipeline(file, audio, vw, vh, region, mode, onProgress);
+  const outputBuffer = await runBestPipeline(file, audio, vw, vh, region, mode, onProgress);
+  if (outputBuffer.byteLength === 0) {
+    throw new Error('Processed video is 0 bytes — encoding failed.');
+  }
+  return outputBuffer;
 }
 
 /**

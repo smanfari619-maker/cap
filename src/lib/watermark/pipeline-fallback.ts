@@ -14,12 +14,13 @@ import {
   finalizeMuxer, normalizeEvenDimension, canMuxAudio 
 } from './encoder';
 import { inpaintRegion } from './inpaint-telea';
+import { WebGLWatermarkEngine } from './webgl-engine';
 
 /**
  * Universal safe seek helper that guarantees execution never hangs,
  * even if the browser drops the 'seeked' event or currentTime is already equal.
  */
-export function seekVideoToTime(video: HTMLVideoElement, timeSec: number, timeoutMs = 800): Promise<void> {
+export function seekVideoToTime(video: HTMLVideoElement, timeSec: number, timeoutMs = 500): Promise<void> {
   return new Promise<void>((resolve) => {
     if (Math.abs(video.currentTime - timeSec) < 0.001) {
       resolve();
@@ -53,6 +54,8 @@ async function recordCanvasFallback(
   total: number,
   fps: number,
   activeRegion: any,
+  mode: 'translucent' | 'opaque' = 'opaque',
+  webglEngine: WebGLWatermarkEngine | null = null,
   onProgress?: (p: number) => void
 ): Promise<ArrayBuffer> {
   const stream = canvas.captureStream(fps);
@@ -87,16 +90,29 @@ async function recordCanvasFallback(
     await seekVideoToTime(video, i / fps);
 
     ctx.drawImage(video, 0, 0, w, h);
-    const imageData = ctx.getImageData(0, 0, w, h);
-    const inpainted = inpaintRegion(imageData, activeRegion);
-    ctx.putImageData(inpainted, 0, 0);
+    if (webglEngine) {
+      webglEngine.processFrame(canvas, activeRegion, mode);
+      ctx.drawImage(webglEngine.getCanvas(), 0, 0);
+    } else {
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const inpainted = inpaintRegion(imageData, activeRegion);
+      ctx.putImageData(inpainted, 0, 0);
+    }
 
     onProgress?.(0.18 + (i / total) * 0.72);
-    await new Promise(r => setTimeout(r, Math.max(10, Math.floor(1000 / fps))));
+    // Pace MediaRecorder to maintain correct target framerate in recorded container
+    await new Promise(r => setTimeout(r, Math.max(8, Math.floor(1000 / fps))));
   }
 
+  try {
+    if (recorder.state === 'recording') recorder.requestData();
+  } catch { /* ignore */ }
   recorder.stop();
-  return await finished;
+  const res = await finished;
+  try {
+    stream.getTracks().forEach(t => t.stop());
+  } catch { /* ignore */ }
+  return res;
 }
 
 export async function pipelineFallback(
@@ -114,69 +130,112 @@ export async function pipelineFallback(
   const video = Object.assign(document.createElement('video'), {
     src: url, muted: true, playsInline: true, preload: 'auto',
   });
-  await new Promise<void>((res, rej) => {
-    const timer = setTimeout(() => rej(new Error('Could not load video metadata (timeout)')), 8000);
-    video.onloadedmetadata = () => { clearTimeout(timer); res(); };
-    video.onerror = () => { clearTimeout(timer); rej(new Error('Could not load video metadata')); };
-  });
-
-  const fps   = 30;
-  const total = Math.max(1, Math.ceil(video.duration * fps));
-
-  const normW = normalizeEvenDimension(vw);
-  const normH = normalizeEvenDimension(vh);
-
-  const canvas = document.createElement('canvas');
-  canvas.width = normW; canvas.height = normH;
-  const ctx    = canvas.getContext('2d', { willReadFrequently: true })!;
-
-  // ── Determine region ───────────────────────────────────────────────────────
-  const activeRegion = region || getEstimatedGeminiRegion(normW, normH);
-  console.log('[WM/Fallback] Inpainting region:', activeRegion, `dims: ${normW}x${normH}`);
-  onProgress?.(0.18);
-
-  // ── Universal MediaRecorder fallback if WebCodecs is unavailable (e.g. Firefox) ──
-  if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') {
-    try {
-      return await recordCanvasFallback(canvas, video, total, fps, activeRegion, onProgress);
-    } finally {
-      URL.revokeObjectURL(url);
-      video.remove();
-    }
-  }
-
-  // ── WebCodecs Frame loop with universal safe seeking ─────────────────────────
-  const audioOk = await canMuxAudio(audio);
-  const muxer   = makeVideoMuxer(normW, normH, audio, audioOk);
-  const enc     = await makeVideoEncoder(muxer, normW, normH, fps);
+  // Temporarily attach off-screen to DOM so WebKit/Safari does not throttle or drop seeked events
+  video.style.position = 'fixed';
+  video.style.top = '-9999px';
+  video.style.left = '-9999px';
+  video.style.width = '1px';
+  video.style.height = '1px';
+  video.style.opacity = '0';
+  video.style.pointerEvents = 'none';
+  document.body.appendChild(video);
 
   try {
-    for (let i = 0; i < total; i++) {
-      await seekVideoToTime(video, i / fps);
+    await new Promise<void>((res, rej) => {
+      const timer = setTimeout(() => rej(new Error('Could not load video metadata (timeout)')), 8000);
+      video.onloadedmetadata = () => { clearTimeout(timer); res(); };
+      video.onerror = () => { clearTimeout(timer); rej(new Error('Could not load video metadata')); };
+      video.load();
+    });
 
-      // Draw → inpaint → encode
-      ctx.drawImage(video, 0, 0, normW, normH);
-      const imageData = ctx.getImageData(0, 0, normW, normH);
-      const inpainted = inpaintRegion(imageData, activeRegion);
-      ctx.putImageData(inpainted, 0, 0);
+    const fps   = 30;
+    const total = Math.max(1, Math.ceil(video.duration * fps));
 
-      const frame = new VideoFrame(canvas, { timestamp: (i * 1_000_000) / fps });
-      try { enc.encode(frame); } finally { frame.close(); }
+    const normW = normalizeEvenDimension(vw);
+    const normH = normalizeEvenDimension(vh);
 
-      onProgress?.(0.18 + (i / total) * 0.72);
-      if (i % CFG.YIELD_EVERY_N_FRAMES === 0) await new Promise(r => setTimeout(r, 0));
+    const canvas = document.createElement('canvas');
+    canvas.width = normW; canvas.height = normH;
+    const ctx    = canvas.getContext('2d', { willReadFrequently: true })!;
+
+    // ── Determine region ───────────────────────────────────────────────────────
+    const activeRegion = region || getEstimatedGeminiRegion(normW, normH);
+    console.log('[WM/Fallback] Inpainting region:', activeRegion, `dims: ${normW}x${normH}`);
+    onProgress?.(0.18);
+
+    // Hardware-accelerated GPU WebGL engine
+    let webglEngine: WebGLWatermarkEngine | null = null;
+    try {
+      webglEngine = new WebGLWatermarkEngine(normW, normH);
+    } catch (err) {
+      console.warn('[WM/Fallback] WebGL engine unavailable, using fast CPU inpaint:', err);
     }
 
-    await enc.flush(); enc.close();
-    if (audioOk && audio) { onProgress?.(0.92); await muxAudio(muxer, audio); }
-    onProgress?.(0.97);
-  } catch (err) {
-    try { if (enc.state !== 'closed') enc.close(); } catch { /* ignore */ }
-    throw err;
-  } finally {
-    URL.revokeObjectURL(url);
-    video.remove();
-  }
+    // ── Universal MediaRecorder fallback if WebCodecs is unavailable or fails ──
+    let useMediaRecorder = typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined';
+    let muxer: any = null;
+    let enc: any = null;
+    let audioOk = false;
 
-  return finalizeMuxer(muxer);
+    if (!useMediaRecorder) {
+      try {
+        audioOk = await canMuxAudio(audio);
+        muxer   = makeVideoMuxer(normW, normH, audio, audioOk);
+        enc     = await makeVideoEncoder(muxer, normW, normH, fps);
+      } catch (err) {
+        console.warn('[WM/Fallback] VideoEncoder configure failed, falling back to MediaRecorder:', err);
+        useMediaRecorder = true;
+      }
+    }
+
+    if (useMediaRecorder) {
+      try {
+        return await recordCanvasFallback(canvas, video, total, fps, activeRegion, mode, webglEngine, onProgress);
+      } finally {
+        if (webglEngine) webglEngine.destroy();
+      }
+    }
+
+    try {
+      for (let i = 0; i < total; i++) {
+        await seekVideoToTime(video, i / fps);
+
+        // Draw → inpaint (GPU WebGL or fast CPU) → encode
+        if (webglEngine) {
+          ctx.drawImage(video, 0, 0, normW, normH);
+          webglEngine.processFrame(canvas, activeRegion, mode);
+          const frame = new VideoFrame(webglEngine.getCanvas(), { timestamp: (i * 1_000_000) / fps });
+          try { enc.encode(frame); } finally { frame.close(); }
+        } else {
+          ctx.drawImage(video, 0, 0, normW, normH);
+          const imageData = ctx.getImageData(0, 0, normW, normH);
+          const inpainted = inpaintRegion(imageData, activeRegion);
+          ctx.putImageData(inpainted, 0, 0);
+          const frame = new VideoFrame(canvas, { timestamp: (i * 1_000_000) / fps });
+          try { enc.encode(frame); } finally { frame.close(); }
+        }
+
+        onProgress?.(0.18 + (i / total) * 0.72);
+        if (i % CFG.YIELD_EVERY_N_FRAMES === 0) {
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+
+      await enc.flush();
+      enc.close();
+      if (webglEngine) webglEngine.destroy();
+
+      if (audioOk && audio) { onProgress?.(0.92); await muxAudio(muxer, audio); }
+      onProgress?.(0.97);
+    } catch (err) {
+      if (webglEngine) webglEngine.destroy();
+      try { if (enc.state !== 'closed') enc.close(); } catch { /* ignore */ }
+      throw err;
+    }
+
+    return finalizeMuxer(muxer);
+  } finally {
+    if (video.parentNode) video.parentNode.removeChild(video);
+    URL.revokeObjectURL(url);
+  }
 }

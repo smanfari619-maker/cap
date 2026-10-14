@@ -212,6 +212,8 @@ export function inpaintRegion(
   const minY = Math.max(0, ry - searchMargin);
   const maxY = Math.min(H - 1, ry + rh + searchMargin);
 
+  // Fast index coordinates by Y row for instant candidate retrieval
+  const rowMap = new Map<number, Array<[number, number]>>();
   for (let sy = minY; sy <= maxY; sy++) {
     for (let sx = minX; sx <= maxX; sx++) {
       const inBox = sx >= rx && sx < rx + rw && sy >= ry && sy < ry + rh;
@@ -219,7 +221,11 @@ export function inpaintRegion(
         const localIdx = (sy - ry) * rw + (sx - rx);
         if (mask[localIdx] === 1) continue; // Skip masked pixels
       }
-      bgCoords.push([sx, sy]);
+      const coord: [number, number] = [sx, sy];
+      bgCoords.push(coord);
+      let r = rowMap.get(sy);
+      if (!r) { r = []; rowMap.set(sy, r); }
+      r.push(coord);
     }
   }
 
@@ -261,8 +267,7 @@ export function inpaintRegion(
       }
     }
 
-    const patchSize = 7;  // larger patch = more context for matching
-    const halfP = 3;
+    const halfP = 2; // 5x5 patch for fast, crisp texture transfer
 
     for (let dy = 0; dy < rh; dy += 2) {
       for (let dx = 0; dx < rw; dx += 2) {
@@ -272,15 +277,22 @@ export function inpaintRegion(
         const gx = rx + dx;
         const gy = ry + dy;
 
-        // Build candidate list: first 16 are same-row (horizontal grain bias),
-        // next 32 are random spread across the full margin.
-        // This dramatically improves results on wood, fabric, marble textures.
-        const horizontalCandidates: Array<[number, number]> = bgCoords.filter(
-          ([cx, cy]) => Math.abs(cy - gy) <= 3
-        );
+        // O(1) Candidate lookup from pre-indexed row map (replaces slow .filter scan)
+        const horizontalCandidates: Array<[number, number]> = [];
+        for (let cd = -2; cd <= 2; cd++) {
+          const row = rowMap.get(gy + cd);
+          if (row) {
+            for (let k = 0; k < row.length; k += 4) {
+              horizontalCandidates.push(row[k]);
+              if (horizontalCandidates.length >= 8) break;
+            }
+          }
+          if (horizontalCandidates.length >= 8) break;
+        }
+
         const candidateList: Array<[number, number]> = [
-          ...horizontalCandidates.slice(0, 16),
-          ...Array.from({ length: 32 }, (_, k) => bgCoords[(k * 23 + (dx + dy) * 11) % bgCoords.length])
+          ...horizontalCandidates,
+          ...Array.from({ length: 10 }, (_, k) => bgCoords[(k * 29 + (dx + dy) * 13) % bgCoords.length])
         ];
 
         let bestCandidate: [number, number] | null = null;
